@@ -171,3 +171,155 @@ pub async fn run_main(
 
     Ok(())
 }
+
+/// Run Codex with custom I/O streams (for Unix Domain Socket integration)
+/// 
+/// This function allows embedding Codex in other applications without
+/// spawning a separate process. It uses the same logic as `run_main` but
+/// accepts custom streams instead of stdin/stdout.
+/// 
+/// # Example
+/// 
+/// ```no_run
+/// use tokio::net::UnixStream;
+/// 
+/// let stream = UnixStream::connect("/tmp/codex.sock").await?;
+/// let (read, write) = stream.into_split();
+/// 
+/// codex_app_server::run_with_streams(
+///     read,
+///     write,
+///     None,
+///     CliConfigOverrides::default(),
+/// ).await?;
+/// ```
+pub async fn run_with_streams<R, W>(
+    stdin: R,
+    stdout: W,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    cli_config_overrides: CliConfigOverrides,
+) -> IoResult<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    // Set up channels (same as run_main)
+    let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+
+    // Task: read from custom stdin stream
+    let stdin_reader_handle = tokio::spawn({
+        async move {
+            let reader = BufReader::new(stdin);
+            let mut lines = reader.lines();
+
+            while let Some(line) = lines.next_line().await.unwrap_or_default() {
+                match serde_json::from_str::<JSONRPCMessage>(&line) {
+                    Ok(msg) => {
+                        if incoming_tx.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => error!("Failed to deserialize JSONRPCMessage: {e}"),
+                }
+            }
+
+            debug!("custom stdin reader finished");
+        }
+    });
+
+    // Parse config (same as run_main)
+    let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("error parsing -c overrides: {e}"),
+        )
+    })?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+        .await
+        .map_err(|e| {
+            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+        })?;
+
+    let feedback = CodexFeedback::new();
+
+    let otel =
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION")).map_err(|e| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("error loading otel config: {e}"),
+            )
+        })?;
+
+    // Initialize tracing (same as run_main)
+    let stderr_fmt = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_filter(EnvFilter::from_default_env());
+
+    let feedback_layer = tracing_subscriber::fmt::layer()
+        .with_writer(feedback.make_writer())
+        .with_ansi(false)
+        .with_target(false)
+        .with_filter(Targets::new().with_default(Level::TRACE));
+
+    let _ = tracing_subscriber::registry()
+        .with(stderr_fmt)
+        .with(feedback_layer)
+        .with(otel.as_ref().map(|provider| {
+            OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+                tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+            )
+        }))
+        .try_init();
+
+    // Task: process incoming messages (same as run_main)
+    let processor_handle = tokio::spawn({
+        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let mut processor = MessageProcessor::new(
+            outgoing_message_sender,
+            codex_linux_sandbox_exe,
+            std::sync::Arc::new(config),
+            feedback.clone(),
+        );
+        async move {
+            while let Some(msg) = incoming_rx.recv().await {
+                match msg {
+                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
+                    JSONRPCMessage::Response(r) => processor.process_response(r).await,
+                    JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
+                    JSONRPCMessage::Error(e) => processor.process_error(e),
+                }
+            }
+
+            info!("processor task exited (channel closed)");
+        }
+    });
+
+    // Task: write to custom stdout stream
+    let stdout_writer_handle = tokio::spawn(async move {
+        let mut stdout = stdout;
+        while let Some(outgoing_message) = outgoing_rx.recv().await {
+            let Ok(value) = serde_json::to_value(outgoing_message) else {
+                error!("Failed to convert OutgoingMessage to JSON value");
+                continue;
+            };
+            match serde_json::to_string(&value) {
+                Ok(mut json) => {
+                    json.push('\n');
+                    if let Err(e) = stdout.write_all(json.as_bytes()).await {
+                        error!("Failed to write to custom stdout: {e}");
+                        break;
+                    }
+                }
+                Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
+            }
+        }
+
+        info!("custom stdout writer exited");
+    });
+
+    // Wait for all tasks
+    let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
+
+    Ok(())
+}
