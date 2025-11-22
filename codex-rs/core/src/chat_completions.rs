@@ -653,6 +653,10 @@ async fn process_chat_sse<S>(
                 .and_then(|tc| tc.as_array())
                 && let Some(tool_call) = tool_calls.first()
             {
+                // DeepSeek compatibility: discard any assistant text when tool_calls are detected
+                // Some providers return both content and tool_calls, violating OpenAI spec
+                assistant_item = None;
+                
                 // Mark that we have an active function call in progress.
                 fn_call_state.active = true;
 
@@ -824,6 +828,14 @@ where
                     }
 
                     // Not an assistant message – forward immediately.
+                    // DeepSeek compatibility: clear cumulative text when FunctionCall is received
+                    // Some providers return both content and tool_calls, so we discard the content
+                    if matches!(
+                        &item,
+                        codex_protocol::models::ResponseItem::FunctionCall { .. }
+                    ) {
+                        this.cumulative.clear();
+                    }
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
