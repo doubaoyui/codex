@@ -7,6 +7,9 @@ use tracing::trace;
 
 use crate::protocol::SandboxPolicy;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Experimental environment variable that will be set to some non-empty value
 /// if both of the following are true:
 ///
@@ -55,6 +58,11 @@ pub(crate) async fn spawn_child_async(
     cmd.current_dir(cwd);
     cmd.env_clear();
     cmd.envs(env);
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     if !sandbox_policy.has_full_network_access() {
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
