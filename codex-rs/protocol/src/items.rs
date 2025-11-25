@@ -18,6 +18,7 @@ pub enum TurnItem {
     AgentMessage(AgentMessageItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
+    FunctionToolCall(FunctionToolCallItem),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -51,6 +52,15 @@ pub struct ReasoningItem {
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct FunctionToolCallItem {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub output: String,
+    pub success: Option<bool>,
 }
 
 impl UserMessageItem {
@@ -149,6 +159,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
+            TurnItem::FunctionToolCall(item) => item.id.clone(),
         }
     }
 
@@ -158,6 +169,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
+            TurnItem::FunctionToolCall(_) => vec![], // No legacy event for function tool calls
         }
     }
 }

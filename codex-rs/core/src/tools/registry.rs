@@ -67,6 +67,11 @@ impl ToolRegistry {
         let otel = invocation.turn.client.get_otel_event_manager();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
+        
+        // Clone data needed for emitting item
+        let session = invocation.session.clone();
+        let turn = invocation.turn.clone();
+        let should_emit = should_emit_tool_call_item(&tool_name, &payload_for_response);
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
@@ -136,11 +141,68 @@ impl ToolRegistry {
                 let output = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+                
+                // Emit FunctionToolCall item for experimental tools
+                if should_emit {
+                    emit_function_tool_call_item(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        &tool_name,
+                        &call_id_owned,
+                        &payload_for_response,
+                        &output,
+                    ).await;
+                }
+                
                 Ok(output.into_response(&call_id_owned, &payload_for_response))
             }
             Err(err) => Err(err),
         }
     }
+}
+
+fn should_emit_tool_call_item(tool_name: &str, payload: &ToolPayload) -> bool {
+    // Only emit for Function tools (not MCP, Custom, etc.)
+    if !matches!(payload, ToolPayload::Function { .. }) {
+        return false;
+    }
+    
+    // List of tools that should emit items
+    matches!(tool_name, "grep_files" | "read_file" | "list_dir")
+}
+
+async fn emit_function_tool_call_item(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    tool_name: &str,
+    call_id: &str,
+    payload: &ToolPayload,
+    output: &ToolOutput,
+) {
+    use codex_protocol::items::{FunctionToolCallItem, TurnItem};
+    
+    let (arguments, content, success) = match output {
+        ToolOutput::Function { content, success, .. } => {
+            let args = match payload {
+                ToolPayload::Function { arguments } => arguments.clone(),
+                _ => String::new(),
+            };
+            (args, content.clone(), *success)
+        }
+        _ => return, // Only handle Function outputs
+    };
+    
+    let item = TurnItem::FunctionToolCall(FunctionToolCallItem {
+        id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        arguments,
+        output: content,
+        success,
+    });
+    
+    // Emit started and completed events
+    session.emit_turn_item_started(turn, &item).await;
+    session.emit_turn_item_completed(turn, item).await;
 }
 
 #[derive(Debug, Clone)]

@@ -794,7 +794,7 @@ impl Session {
         }
     }
 
-    async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+    pub async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
             turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
@@ -806,7 +806,7 @@ impl Session {
         .await;
     }
 
-    async fn emit_turn_item_completed(&self, turn_context: &TurnContext, item: TurnItem) {
+    pub async fn emit_turn_item_completed(&self, turn_context: &TurnContext, item: TurnItem) {
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {

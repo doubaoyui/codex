@@ -743,6 +743,15 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     CodeReview { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    FunctionToolCall {
+        id: String,
+        tool_name: String,
+        arguments: String,
+        output: String,
+        success: Option<bool>,
+    },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -770,6 +779,13 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
+            },
+            CoreTurnItem::FunctionToolCall(tool_call) => ThreadItem::FunctionToolCall {
+                id: tool_call.id,
+                tool_name: tool_call.tool_name,
+                arguments: tool_call.arguments,
+                output: tool_call.output,
+                success: tool_call.success,
             },
         }
     }
