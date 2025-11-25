@@ -201,6 +201,12 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_parallel_tool_calls: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+                "test_sync_tool".to_string(),
+            ],
         )
     } else if slug.starts_with("gpt-5.1") {
         model_family!(
@@ -214,6 +220,12 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             truncation_policy: TruncationPolicy::Bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+                "test_sync_tool".to_string(),
+            ],
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -223,6 +235,12 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             shell_type: ConfigShellToolType::Default,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+                "test_sync_tool".to_string(),
+            ],
         )
     } else {
         None
@@ -239,7 +257,12 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         supports_parallel_tool_calls: false,
         apply_patch_tool_type: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
-        experimental_supported_tools: Vec::new(),
+        experimental_supported_tools: vec![
+            "grep_files".to_string(),
+            "list_dir".to_string(),
+            "read_file".to_string(),
+            "test_sync_tool".to_string(),
+        ],
         effective_context_window_percent: 95,
         support_verbosity: false,
         shell_type: ConfigShellToolType::Default,
