@@ -32,6 +32,8 @@ struct GrepFilesArgs {
     #[serde(default)]
     include: Option<String>,
     #[serde(default)]
+    include_hidden: bool,
+    #[serde(default)]
     path: Option<String>,
     #[serde(default = "default_limit")]
     limit: usize,
@@ -76,6 +78,7 @@ impl ToolHandler for GrepFilesHandler {
 
         let limit = args.limit.min(MAX_LIMIT);
         let search_path = turn.resolve_path(args.path.clone());
+        let include_hidden = args.include_hidden;
 
         verify_path_exists(&search_path).await?;
 
@@ -87,8 +90,15 @@ impl ToolHandler for GrepFilesHandler {
             }
         });
 
-        let search_results =
-            run_rg_search(pattern, include.as_deref(), &search_path, limit, &turn.cwd).await?;
+        let search_results = run_rg_search(
+            pattern,
+            include.as_deref(),
+            include_hidden,
+            &search_path,
+            limit,
+            &turn.cwd,
+        )
+        .await?;
 
         if search_results.is_empty() {
             Ok(ToolOutput::Function {
@@ -116,6 +126,7 @@ async fn verify_path_exists(path: &Path) -> Result<(), FunctionCallError> {
 async fn run_rg_search(
     pattern: &str,
     include: Option<&str>,
+    include_hidden: bool,
     search_path: &Path,
     limit: usize,
     _cwd: &Path,
@@ -138,7 +149,13 @@ async fn run_rg_search(
     // Run search in a blocking task with timeout
     let search_path = search_path.to_path_buf();
     let search_future = tokio::task::spawn_blocking(move || {
-        search_files_native(&matcher, glob_matcher.as_ref(), &search_path, limit)
+        search_files_native(
+            &matcher,
+            glob_matcher.as_ref(),
+            &search_path,
+            limit,
+            include_hidden,
+        )
     });
 
     let results = tokio::time::timeout(SEARCH_TIMEOUT, search_future)
@@ -158,16 +175,24 @@ fn search_files_native(
     glob_matcher: Option<&GlobMatcher>,
     search_path: &Path,
     limit: usize,
+    include_hidden: bool,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut results_with_time: Vec<(String, std::time::SystemTime)> = Vec::new();
 
-    // Build walker with .gitignore support
-    let walker = WalkBuilder::new(search_path)
-        .hidden(false) // Don't skip hidden files by default
-        .git_ignore(true) // Respect .gitignore
-        .git_global(true) // Respect global gitignore
-        .git_exclude(true) // Respect .git/info/exclude
-        .build();
+    // Build walker with .gitignore support.
+    // By default we mimic ripgrep's behavior: skip hidden files/directories,
+    // unless include_hidden is explicitly enabled.
+    let walker = {
+        let mut builder = WalkBuilder::new(search_path);
+        if include_hidden {
+            builder.hidden(false);
+        }
+        builder
+            .git_ignore(true) // Respect .gitignore
+            .git_global(true) // Respect global gitignore
+            .git_exclude(true) // Respect .git/info/exclude
+            .build()
+    };
 
     for entry in walker {
         let entry = match entry {
@@ -247,7 +272,7 @@ mod tests {
         std::fs::write(dir.join("match_two.txt"), "alpha delta")?;
         std::fs::write(dir.join("other.txt"), "omega")?;
 
-        let results = run_rg_search("alpha", None, dir, 10, dir).await?;
+        let results = run_rg_search("alpha", None, false, dir, 10, dir).await?;
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|path| path.ends_with("match_one.txt")));
         assert!(results.iter().any(|path| path.ends_with("match_two.txt")));
@@ -261,7 +286,7 @@ mod tests {
         std::fs::write(dir.join("match_one.rs"), "alpha beta gamma")?;
         std::fs::write(dir.join("match_two.txt"), "alpha delta")?;
 
-        let results = run_rg_search("alpha", Some("*.rs"), dir, 10, dir).await?;
+        let results = run_rg_search("alpha", Some("*.rs"), false, dir, 10, dir).await?;
         assert_eq!(results.len(), 1);
         assert!(results.iter().all(|path| path.ends_with("match_one.rs")));
         Ok(())
@@ -275,7 +300,7 @@ mod tests {
         std::fs::write(dir.join("two.txt"), "alpha two")?;
         std::fs::write(dir.join("three.txt"), "alpha three")?;
 
-        let results = run_rg_search("alpha", None, dir, 2, dir).await?;
+        let results = run_rg_search("alpha", None, false, dir, 2, dir).await?;
         assert_eq!(results.len(), 2);
         Ok(())
     }
@@ -286,7 +311,7 @@ mod tests {
         let dir = temp.path();
         std::fs::write(dir.join("one.txt"), "omega")?;
 
-        let results = run_rg_search("alpha", None, dir, 5, dir).await?;
+        let results = run_rg_search("alpha", None, false, dir, 5, dir).await?;
         assert!(results.is_empty());
         Ok(())
     }
