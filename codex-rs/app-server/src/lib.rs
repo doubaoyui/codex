@@ -240,11 +240,12 @@ where
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
-        .await
-        .map_err(|e| {
-            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-        })?;
+    let config =
+        Config::load_with_cli_overrides(cli_kv_overrides.clone(), ConfigOverrides::default())
+            .await
+            .map_err(|e| {
+                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+            })?;
 
     let feedback = CodexFeedback::new();
 
@@ -280,10 +281,12 @@ where
     // Task: process incoming messages (same as run_main)
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
+            cli_overrides,
             feedback.clone(),
         );
         async move {
