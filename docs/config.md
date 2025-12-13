@@ -39,16 +39,16 @@ web_search_request = true        # allow the model to request web searches
 
 Supported features:
 
-| Key                                       | Default | Stage        | Description                                          |
-| ----------------------------------------- | :-----: | ------------ | ---------------------------------------------------- |
-| `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool                 |
-| `rmcp_client`                             |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers |
-| `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
-| `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
-| `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
-| `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment           |
-| `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                      |
-| `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox             |
+| Key                                   | Default | Stage        | Description                                           |
+| ------------------------------------- | :-----: | ------------ | ----------------------------------------------------- |
+| `unified_exec`                        |  false  | Experimental | Use the unified PTY-backed exec tool                  |
+| `rmcp_client`                         |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers  |
+| `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
+| `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
+| `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
+| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
+| `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
+| `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 
 Notes:
 
@@ -195,7 +195,7 @@ If the selected model is known to support reasoning (for example: `o3`, `o4-mini
 - `"low"`
 - `"medium"` (default)
 - `"high"`
-- `"xhigh"` (available only on `gpt-5.1-codex-max`)
+- `"xhigh"` (available on `gpt-5.1-codex-max` and `gpt-5.2`)
 
 Note: to minimize reasoning, choose `"minimal"`.
 
@@ -744,6 +744,8 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 
 > [!NOTE]
 > Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+
+When Codex detects WSL 2 inside Windows Terminal (the session exports `WT_SESSION`), `tui.notifications` automatically switches to a Windows toast backend by spawning `powershell.exe`. This ensures both approval prompts and completed turns trigger native toasts even though Windows Terminal ignores OSC 9 escape sequences. Terminals that advertise OSC 9 support (iTerm2, WezTerm, kitty, etc.) continue to use the existing escape-sequence backend, and the `notify` hook remains unchanged.
 
 ### hide_agent_reasoning
 

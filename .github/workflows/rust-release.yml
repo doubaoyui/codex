@@ -101,7 +101,13 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+        shell: bash
+        run: |
+          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
+          else
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+          fi
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
@@ -109,6 +115,18 @@ jobs:
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
+
+      - if: ${{ contains(matrix.target, 'windows') }}
+        name: Sign Windows binaries with Azure Trusted Signing
+        uses: ./.github/actions/windows-code-sign
+        with:
+          target: ${{ matrix.target }}
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Configure Apple code signing
