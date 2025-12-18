@@ -402,7 +402,9 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         supports_reasoning_summaries: false,
         reasoning_summary_format: ReasoningSummaryFormat::None,
         supports_parallel_tool_calls: false,
-        apply_patch_tool_type: None,
+        // Default unknown/custom models to the standard Function apply_patch tool
+        // so non-OpenAI providers (e.g., DeepSeek) get JSON tool wiring by default.
+        apply_patch_tool_type: Some(ApplyPatchToolType::Function),
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         experimental_supported_tools: vec![
             "grep_files".to_string(),
