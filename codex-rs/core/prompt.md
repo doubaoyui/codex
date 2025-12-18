@@ -356,6 +356,9 @@ It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with `+` even when creating a new file
+- In `*** Update File:` hunks, `@@ ...` is a *single optional context line* that starts a chunk; it is not a “section header list”.
+- Every chunk must include at least one change line immediately after the optional `@@ ...` line. Change lines must start with exactly one of: ` ` (context), `+` (add), `-` (remove).
+- Do **not** stack multiple `@@ ...` lines back-to-back. This will fail validation (e.g. `@@ package main` followed by `@@ import (...)`).
 
 ## `update_plan`
 
