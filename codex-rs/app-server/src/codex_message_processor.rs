@@ -46,8 +46,8 @@ use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListMcpServersParams;
-use codex_app_server_protocol::ListMcpServersResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
@@ -55,10 +55,10 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
-use codex_app_server_protocol::McpServer;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
+use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -81,6 +81,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -280,7 +282,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone(), ConfigOverrides::default())
+        Config::load_with_cli_overrides(self.cli_overrides.clone())
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -366,12 +368,8 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
             }
-            ClientRequest::ThreadCompact {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "thread/compact")
-                    .await;
+            ClientRequest::SkillsList { request_id, params } => {
+                self.skills_list(request_id, params).await;
             }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
@@ -395,13 +393,20 @@ impl CodexMessageProcessor {
                 self.handle_list_conversations(request_id, params).await;
             }
             ClientRequest::ModelList { request_id, params } => {
-                self.list_models(request_id, params).await;
+                let outgoing = self.outgoing.clone();
+                let conversation_manager = self.conversation_manager.clone();
+                let config = self.config.clone();
+
+                tokio::spawn(async move {
+                    Self::list_models(outgoing, conversation_manager, config, request_id, params)
+                        .await;
+                });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
             }
-            ClientRequest::McpServersList { request_id, params } => {
-                self.list_mcp_servers(request_id, params).await;
+            ClientRequest::McpServerStatusList { request_id, params } => {
+                self.list_mcp_server_status(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -508,15 +513,6 @@ impl CodexMessageProcessor {
                 self.upload_feedback(request_id, params).await;
             }
         }
-    }
-
-    async fn send_unimplemented_error(&self, request_id: RequestId, method: &str) {
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("{method} is not implemented yet"),
-            data: None,
-        };
-        self.outgoing.send_error(request_id, error).await;
     }
 
     async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
@@ -1265,7 +1261,7 @@ impl CodexMessageProcessor {
         let mut cli_overrides = cli_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
             cli_overrides.insert(
-                "features.enable_experimental_windows_sandbox".to_string(),
+                "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
@@ -1384,9 +1380,13 @@ impl CodexMessageProcessor {
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
-                // Use the same behavior as the v1 API with experimental_raw_events=false.
+                // Use the same behavior as the v1 API, with opt-in support for raw item events.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
+                    .attach_conversation_listener(
+                        conversation_id,
+                        params.experimental_raw_events,
+                        ApiVersion::V2,
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -1903,9 +1903,17 @@ impl CodexMessageProcessor {
         Ok((items, next_cursor))
     }
 
-    async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
+    async fn list_models(
+        outgoing: Arc<OutgoingMessageSender>,
+        conversation_manager: Arc<ConversationManager>,
+        config: Arc<Config>,
+        request_id: RequestId,
+        params: ModelListParams,
+    ) {
         let ModelListParams { limit, cursor } = params;
-        let models = supported_models(self.conversation_manager.clone(), &self.config).await;
+        let mut config = (*config).clone();
+        config.features.enable(Feature::RemoteModels);
+        let models = supported_models(conversation_manager, &config).await;
         let total = models.len();
 
         if total == 0 {
@@ -1913,7 +1921,7 @@ impl CodexMessageProcessor {
                 data: Vec::new(),
                 next_cursor: None,
             };
-            self.outgoing.send_response(request_id, response).await;
+            outgoing.send_response(request_id, response).await;
             return;
         }
 
@@ -1928,7 +1936,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid cursor: {cursor}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -1941,7 +1949,7 @@ impl CodexMessageProcessor {
                 message: format!("cursor {start} exceeds total models {total}"),
                 data: None,
             };
-            self.outgoing.send_error(request_id, error).await;
+            outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -1956,7 +1964,7 @@ impl CodexMessageProcessor {
             data: items,
             next_cursor,
         };
-        self.outgoing.send_response(request_id, response).await;
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn mcp_server_oauth_login(
@@ -2063,7 +2071,12 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn list_mcp_servers(&self, request_id: RequestId, params: ListMcpServersParams) {
+    async fn list_mcp_server_status(
+        &self,
+        request_id: RequestId,
+        params: ListMcpServerStatusParams,
+    ) {
+        let outgoing = Arc::clone(&self.outgoing);
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -2072,6 +2085,17 @@ impl CodexMessageProcessor {
             }
         };
 
+        tokio::spawn(async move {
+            Self::list_mcp_server_status_task(outgoing, request_id, params, config).await;
+        });
+    }
+
+    async fn list_mcp_server_status_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: RequestId,
+        params: ListMcpServerStatusParams,
+        config: Config,
+    ) {
         let snapshot = collect_mcp_snapshot(&config).await;
 
         let tools_by_server = group_tools_by_server(&snapshot.tools);
@@ -2099,7 +2123,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid cursor: {cursor}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -2112,15 +2136,15 @@ impl CodexMessageProcessor {
                 message: format!("cursor {start} exceeds total MCP servers {total}"),
                 data: None,
             };
-            self.outgoing.send_error(request_id, error).await;
+            outgoing.send_error(request_id, error).await;
             return;
         }
 
         let end = start.saturating_add(effective_limit).min(total);
 
-        let data: Vec<McpServer> = server_names[start..end]
+        let data: Vec<McpServerStatus> = server_names[start..end]
             .iter()
-            .map(|name| McpServer {
+            .map(|name| McpServerStatus {
                 name: name.clone(),
                 tools: tools_by_server.get(name).cloned().unwrap_or_default(),
                 resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
@@ -2144,9 +2168,9 @@ impl CodexMessageProcessor {
             None
         };
 
-        let response = ListMcpServersResponse { data, next_cursor };
+        let response = ListMcpServerStatusResponse { data, next_cursor };
 
-        self.outgoing.send_response(request_id, response).await;
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn handle_resume_conversation(
@@ -2182,7 +2206,7 @@ impl CodexMessageProcessor {
                 let mut cli_overrides = cli_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
                     cli_overrides.insert(
-                        "features.enable_experimental_windows_sandbox".to_string(),
+                        "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }
@@ -2612,6 +2636,33 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, SendUserTurnResponse {})
+            .await;
+    }
+
+    async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
+        let SkillsListParams { cwds, force_reload } = params;
+        let cwds = if cwds.is_empty() {
+            vec![self.config.cwd.clone()]
+        } else {
+            cwds
+        };
+
+        let skills_manager = self.conversation_manager.skills_manager();
+        let data = cwds
+            .into_iter()
+            .map(|cwd| {
+                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
+                let errors = errors_to_info(&outcome.errors);
+                let skills = skills_to_info(&outcome.skills);
+                codex_app_server_protocol::SkillsListEntry {
+                    cwd,
+                    skills,
+                    errors,
+                }
+            })
+            .collect();
+        self.outgoing
+            .send_response(request_id, SkillsListResponse { data })
             .await;
     }
 
@@ -3260,9 +3311,36 @@ impl CodexMessageProcessor {
     }
 }
 
+fn skills_to_info(
+    skills: &[codex_core::skills::SkillMetadata],
+) -> Vec<codex_app_server_protocol::SkillMetadata> {
+    skills
+        .iter()
+        .map(|skill| codex_app_server_protocol::SkillMetadata {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            short_description: skill.short_description.clone(),
+            path: skill.path.clone(),
+            scope: skill.scope.into(),
+        })
+        .collect()
+}
+
+fn errors_to_info(
+    errors: &[codex_core::skills::SkillError],
+) -> Vec<codex_app_server_protocol::SkillErrorInfo> {
+    errors
+        .iter()
+        .map(|err| codex_app_server_protocol::SkillErrorInfo {
+            path: err.path.clone(),
+            message: err.message.clone(),
+        })
+        .collect()
+}
+
 async fn derive_config_from_params(
     overrides: ConfigOverrides,
-    cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
+    cli_overrides: Option<HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
     let cli_overrides = cli_overrides
         .unwrap_or_default()
@@ -3270,7 +3348,7 @@ async fn derive_config_from_params(
         .map(|(k, v)| (k, json_to_toml(v)))
         .collect();
 
-    Config::load_with_cli_overrides(cli_overrides, overrides).await
+    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
 }
 
 async fn read_summary_from_rollout(

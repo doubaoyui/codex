@@ -48,6 +48,7 @@ grep-regex = { workspace = true }
 grep-searcher = { workspace = true }
 http = { workspace = true }
 ignore = { workspace = true }
+include_dir = { workspace = true }
 indexmap = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
@@ -65,7 +66,6 @@ sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
-strum_macros = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 test-log = { workspace = true }
@@ -136,7 +136,6 @@ predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
