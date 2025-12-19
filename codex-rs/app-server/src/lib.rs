@@ -239,12 +239,9 @@ where
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config =
-        Config::load_with_cli_overrides(cli_kv_overrides.clone(), ConfigOverrides::default())
-            .await
-            .map_err(|e| {
-                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-            })?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides.clone())
+        .await
+        .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}")))?;
 
     let feedback = CodexFeedback::new();
 
