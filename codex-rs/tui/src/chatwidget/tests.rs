@@ -11,7 +11,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -407,6 +407,7 @@ async fn make_chatwidget_manual(
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
+        external_editor_state: ExternalEditorState::Closed,
     };
     (widget, rx, op_rx)
 }
@@ -1284,9 +1285,9 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
 }
 
-#[test]
-fn unified_exec_waiting_multiple_empty_snapshots() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+#[tokio::test]
+async fn unified_exec_waiting_multiple_empty_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     begin_unified_exec_startup(&mut chat, "call-wait-1", "proc-1", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
@@ -1311,9 +1312,9 @@ fn unified_exec_waiting_multiple_empty_snapshots() {
     assert_snapshot!("unified_exec_waiting_multiple_empty_after", combined);
 }
 
-#[test]
-fn unified_exec_empty_then_non_empty_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+#[tokio::test]
+async fn unified_exec_empty_then_non_empty_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     begin_unified_exec_startup(&mut chat, "call-wait-2", "proc-2", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-2a", "proc-2", "");
@@ -1327,9 +1328,9 @@ fn unified_exec_empty_then_non_empty_snapshot() {
     assert_snapshot!("unified_exec_empty_then_non_empty_after", combined);
 }
 
-#[test]
-fn unified_exec_non_empty_then_empty_snapshots() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+#[tokio::test]
+async fn unified_exec_non_empty_then_empty_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     begin_unified_exec_startup(&mut chat, "call-wait-3", "proc-3", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
@@ -1452,18 +1453,6 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
-}
-
-#[tokio::test]
-async fn slash_undo_sends_op() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.dispatch_command(SlashCommand::Undo);
-
-    match rx.try_recv() {
-        Ok(AppEvent::CodexOp(Op::Undo)) => {}
-        other => panic!("expected AppEvent::CodexOp(Op::Undo), got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -2275,12 +2264,12 @@ async fn approvals_popup_shows_disabled_presets() {
     chat.config.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(ConstraintError {
-                message: "this message should be printed in the description".to_string(),
-            }),
+            _ => Err(ConstraintError::invalid_value(
+                candidate.to_string(),
+                "this message should be printed in the description",
+            )),
         })
         .expect("construct constrained approval policy");
-
     chat.open_approvals_popup();
 
     let width = 80;
@@ -2311,12 +2300,12 @@ async fn approvals_popup_navigation_skips_disabled() {
     chat.config.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(ConstraintError {
-                message: "disabled preset".to_string(),
-            }),
+            _ => Err(ConstraintError::invalid_value(
+                candidate.to_string(),
+                "[on-request]",
+            )),
         })
         .expect("construct constrained approval policy");
-
     chat.open_approvals_popup();
 
     // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
@@ -3234,11 +3223,13 @@ async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.bottom_pane.set_task_running(true);
     let msg = "Reconnecting... 2/5";
+    let details = "Idle timeout waiting for SSE";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some(details.to_string()),
         }),
     });
 
@@ -3252,6 +3243,7 @@ async fn stream_error_updates_status_indicator() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), msg);
+    assert_eq!(status.details(), Some(details));
 }
 
 #[tokio::test]
@@ -3288,6 +3280,7 @@ async fn stream_recovery_restores_previous_status_header() {
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: "Reconnecting... 1/5".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
         }),
     });
     drain_insert_history(&mut rx);
@@ -3303,6 +3296,7 @@ async fn stream_recovery_restores_previous_status_header() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
     assert!(chat.retry_status_header.is_none());
 }
 
