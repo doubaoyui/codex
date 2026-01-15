@@ -209,6 +209,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
+            experimental_supported_tools: arthas_default_experimental_supported_tools(),
         )
     } else if (slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
