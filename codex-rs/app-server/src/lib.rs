@@ -432,6 +432,8 @@ where
             let message = ConfigWarningNotification {
                 summary: "Invalid configuration; using defaults.".to_string(),
                 details: Some(err.to_string()),
+                path: None,
+                range: None,
             };
             config_warnings.push(message);
             Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
@@ -449,6 +451,8 @@ where
         let message = ConfigWarningNotification {
             summary: "Error parsing rules; custom rules not applied.".to_string(),
             details: Some(err.to_string()),
+            path: None,
+            range: None,
         };
         config_warnings.push(message);
     }
