@@ -146,7 +146,6 @@ ignore = "0.4.23"
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
-globset = "0.4"
 indoc = "2.0"
 image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"
