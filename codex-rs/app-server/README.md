@@ -79,15 +79,21 @@ Example (from OpenAI's official VSCode extension):
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options).
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `app/list` — list available apps.
+- `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
+- `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
@@ -109,6 +115,20 @@ Start a fresh thread when you need a new Codex conversation.
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
+    "personality": "friendly",
+    "dynamicTools": [
+        {
+            "name": "lookup_ticket",
+            "description": "Fetch a ticket by id",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"]
+            }
+        }
+    ],
 } }
 { "id": 10, "result": {
     "thread": {
@@ -121,10 +141,13 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
 ```json
-{ "method": "thread/resume", "id": 11, "params": { "threadId": "thr_123" } }
+{ "method": "thread/resume", "id": 11, "params": {
+    "threadId": "thr_123",
+    "personality": "friendly"
+} }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
@@ -138,11 +161,14 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 
 ### Example: List threads (with pagination & filters)
 
-`thread/list` lets you render a history UI. Pass any combination of:
+`thread/list` lets you render a history UI. Results default to `createdAt` (newest first) descending. Pass any combination of:
 
 - `cursor` — opaque string from a prior response; omit for the first page.
 - `limit` — server defaults to a reasonable page size if unset.
+- `sortKey` — `created_at` (default) or `updated_at`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
+- `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
+- `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 
 Example:
 
@@ -150,11 +176,12 @@ Example:
 { "method": "thread/list", "id": 20, "params": {
     "cursor": null,
     "limit": 25,
+    "sortKey": "created_at"
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
@@ -173,6 +200,20 @@ When `nextCursor` is `null`, you’ve reached the final page.
 } }
 ```
 
+### Example: Read a thread
+
+Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`.
+
+```json
+{ "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
+{ "id": 22, "result": { "thread": { "id": "thr_123", "turns": [] } } }
+```
+
+```json
+{ "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
+{ "id": 23, "result": { "thread": { "id": "thr_123", "turns": [ ... ] } } }
+```
+
 ### Example: Archive a thread
 
 Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory.
@@ -182,7 +223,16 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 { "id": 21, "result": {} }
 ```
 
-An archived thread will not appear in future calls to `thread/list`.
+An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
+
+### Example: Unarchive a thread
+
+Use `thread/unarchive` to move an archived rollout back into the sessions directory.
+
+```json
+{ "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
+{ "id": 24, "result": { "thread": { "id": "thr_b" } } }
+```
 
 ### Example: Start a turn (send user input)
 
@@ -209,6 +259,7 @@ You can optionally specify config overrides on the new turn. If specified, these
     "model": "gpt-5.1-codex",
     "effort": "medium",
     "summary": "concise",
+    "personality": "friendly",
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
         "type": "object",
@@ -375,6 +426,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
+- `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query}` for a web search request issued by the agent.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
@@ -439,7 +491,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason` or `risk`, plus `parsedCmd` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -465,8 +517,15 @@ Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` inp
   "params": {
     "threadId": "thread-1",
     "input": [
-      { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
-      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+      {
+        "type": "text",
+        "text": "$skill-creator Add a new skill for triaging flaky CI."
+      },
+      {
+        "type": "skill",
+        "name": "skill-creator",
+        "path": "/Users/me/.codex/skills/skill-creator/SKILL.md"
+      }
     ]
   }
 }
@@ -480,18 +539,47 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "cwd": "/Users/me/project",
+    "cwds": ["/Users/me/project"],
     "forceReload": false
 } }
 { "id": 25, "result": {
-    "skills": [
-        { "name": "skill-creator", "description": "Create or update a Codex skill" }
-    ]
+    "data": [{
+        "cwd": "/Users/me/project",
+        "skills": [
+            {
+              "name": "skill-creator",
+              "description": "Create or update a Codex skill",
+              "enabled": true,
+              "interface": {
+                "displayName": "Skill Creator",
+                "shortDescription": "Create or update a Codex skill",
+                "iconSmall": "icon.svg",
+                "iconLarge": "icon-large.svg",
+                "brandColor": "#111111",
+                "defaultPrompt": "Add a new skill for triaging flaky CI."
+              }
+            }
+        ],
+        "errors": []
+    }]
 } }
+```
+
+To enable or disable a skill by path:
+
+```json
+{
+  "method": "skills/config/write",
+  "id": 26,
+  "params": {
+    "path": "/Users/me/.codex/skills/skill-creator/SKILL.md",
+    "enabled": false
+  }
+}
 ```
 
 ## Auth endpoints
