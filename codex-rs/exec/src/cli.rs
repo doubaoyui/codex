@@ -2,7 +2,7 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
-use codex_common::CliConfigOverrides;
+use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -30,7 +30,7 @@ pub struct Cli {
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
-    /// Specify which local provider to use (lmstudio, ollama, or ollama-chat).
+    /// Specify which local provider to use (lmstudio or ollama).
     /// If not specified with --oss, will use config default or show selection.
     #[arg(long = "local-provider")]
     pub oss_provider: Option<String>,
@@ -38,7 +38,7 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
-    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<codex_utils_cli::SandboxModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -70,6 +70,10 @@ pub struct Cli {
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
+
+    /// Run without persisting session files to disk.
+    #[arg(long = "ephemeral", global = true, default_value_t = false)]
+    pub ephemeral: bool,
 
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
@@ -114,7 +118,7 @@ pub enum Command {
 struct ResumeArgsRaw {
     // Note: This is the direct clap shape. We reinterpret the positional when --last is set
     // so "codex resume --last <prompt>" treats the positional as a prompt, not a session id.
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -144,7 +148,7 @@ struct ResumeArgsRaw {
 
 #[derive(Debug)]
 pub struct ResumeArgs {
-    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     pub session_id: Option<String>,
 
@@ -243,4 +247,40 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn resume_parses_prompt_after_global_flags() {
+        const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "resume",
+            "--last",
+            "--json",
+            "--model",
+            "gpt-5.2-codex",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            PROMPT,
+        ]);
+
+        assert!(cli.ephemeral);
+        let Some(Command::Resume(args)) = cli.command else {
+            panic!("expected resume command");
+        };
+        let effective_prompt = args.prompt.clone().or_else(|| {
+            if args.last {
+                args.session_id.clone()
+            } else {
+                None
+            }
+        });
+        assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
+    }
 }

@@ -1,6 +1,8 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
+use crate::codex::SteerInputError;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
@@ -9,8 +11,11 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
 use tokio::sync::watch;
+
+use crate::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -43,6 +48,14 @@ impl CodexThread {
         self.codex.submit(op).await
     }
 
+    pub async fn steer_input(
+        &self,
+        input: Vec<UserInput>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<String, SteerInputError> {
+        self.codex.steer_input(input, expected_turn_id).await
+    }
+
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.codex.submit_with_id(sub).await
@@ -64,7 +77,15 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
+    pub fn state_db(&self) -> Option<StateDbHandle> {
+        self.codex.state_db()
+    }
+
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub fn enabled(&self, feature: Feature) -> bool {
+        self.codex.enabled(feature)
     }
 }

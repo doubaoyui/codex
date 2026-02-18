@@ -8,7 +8,6 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
-use codex_core::WireApi;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
@@ -127,7 +126,7 @@ impl TestCodexBuilder {
         let base_url_clone = base_url.clone();
         self.config_mutators.push(Box::new(move |config| {
             config.model_provider.base_url = Some(base_url_clone);
-            config.model_provider.wire_api = WireApi::ResponsesWebsocket;
+            config.features.enable(Feature::ResponsesWebsockets);
         }));
         self.build_with_home_and_base_url(base_url, home, None)
             .await
@@ -171,7 +170,7 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = ThreadManager::with_models_provider_and_home(
+        let thread_manager = codex_core::test_support::thread_manager_with_models_provider_and_home(
             auth.clone(),
             config.model_provider.clone(),
             config.codex_home.clone(),
@@ -180,7 +179,7 @@ impl TestCodexBuilder {
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = codex_core::AuthManager::from_auth_for_testing(auth);
+                let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
                 thread_manager
                     .resume_thread_from_rollout(config.clone(), path, auth_manager)
                     .await?
