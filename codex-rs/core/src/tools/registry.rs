@@ -238,12 +238,12 @@ async fn emit_function_tool_call_item(
     use codex_protocol::items::{FunctionToolCallItem, TurnItem};
     
     let (arguments, content, success) = match output {
-        ToolOutput::Function { content, success, .. } => {
+        ToolOutput::Function { body, success } => {
             let args = match payload {
                 ToolPayload::Function { arguments } => arguments.clone(),
                 _ => String::new(),
             };
-            (args, content.clone(), *success)
+            (args, body.to_text().unwrap_or_default(), *success)
         }
         _ => return, // Only handle Function outputs
     };

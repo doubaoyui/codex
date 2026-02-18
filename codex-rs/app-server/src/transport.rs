@@ -251,6 +251,78 @@ pub(crate) async fn start_stdio_connection(
     Ok(())
 }
 
+pub(crate) async fn start_custom_stdio_connection<R, W>(
+    stdin: R,
+    stdout: W,
+    transport_event_tx: mpsc::Sender<TransportEvent>,
+    stdio_handles: &mut Vec<JoinHandle<()>>,
+) -> IoResult<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let connection_id = ConnectionId(0);
+    let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let writer_tx_for_reader = writer_tx.clone();
+    transport_event_tx
+        .send(TransportEvent::ConnectionOpened {
+            connection_id,
+            writer: writer_tx,
+        })
+        .await
+        .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, "processor unavailable"))?;
+
+    let transport_event_tx_for_reader = transport_event_tx.clone();
+    stdio_handles.push(tokio::spawn(async move {
+        let reader = BufReader::new(stdin);
+        let mut lines = reader.lines();
+
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if !forward_incoming_message(
+                        &transport_event_tx_for_reader,
+                        &writer_tx_for_reader,
+                        connection_id,
+                        &line,
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    error!("Failed reading custom stdin: {err}");
+                    break;
+                }
+            }
+        }
+
+        let _ = transport_event_tx_for_reader
+            .send(TransportEvent::ConnectionClosed { connection_id })
+            .await;
+        debug!("stdin reader finished (EOF)");
+    }));
+
+    stdio_handles.push(tokio::spawn(async move {
+        let mut stdout = stdout;
+        while let Some(outgoing_message) = writer_rx.recv().await {
+            let Some(mut json) = serialize_outgoing_message(outgoing_message) else {
+                continue;
+            };
+            json.push('\n');
+            if let Err(err) = stdout.write_all(json.as_bytes()).await {
+                error!("Failed to write to custom stdout: {err}");
+                break;
+            }
+        }
+        info!("stdout writer exited (channel closed)");
+    }));
+
+    Ok(())
+}
+
 pub(crate) async fn start_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,

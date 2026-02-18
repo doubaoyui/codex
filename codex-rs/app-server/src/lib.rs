@@ -28,6 +28,7 @@ use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_custom_stdio_connection;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -610,30 +611,16 @@ where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    // Set up channels.
-    let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (transport_event_tx, mut transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
+    let (outbound_control_tx, mut outbound_control_rx) =
+        mpsc::channel::<OutboundControlEvent>(CHANNEL_CAPACITY);
 
-    // Task: read from custom stdin stream, push to `incoming_tx`.
-    let stdin_reader_handle = tokio::spawn({
-        async move {
-            let reader = BufReader::new(stdin);
-            let mut lines = reader.lines();
-
-            while let Some(line) = lines.next_line().await.unwrap_or_default() {
-                match serde_json::from_str::<JSONRPCMessage>(&line) {
-                    Ok(msg) => {
-                        if incoming_tx.send(msg).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => error!("Failed to deserialize JSONRPCMessage: {e}"),
-                }
-            }
-
-            debug!("stdin reader finished (EOF)");
-        }
-    });
+    let mut stdio_handles = Vec::<JoinHandle<()>>::new();
+    start_custom_stdio_connection(stdin, stdout, transport_event_tx.clone(), &mut stdio_handles)
+        .await?;
+    let shutdown_when_no_connections = true;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
@@ -643,22 +630,59 @@ where
             format!("error parsing -c overrides: {e}"),
         )
     })?;
+    let cloud_requirements = match ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides.clone())
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await
+    {
+        Ok(config) => {
+            let effective_toml = config.config_layer_stack.effective_config();
+            match effective_toml.try_into() {
+                Ok(config_toml) => {
+                    if let Err(err) = codex_core::personality_migration::maybe_migrate_personality(
+                        &config.codex_home,
+                        &config_toml,
+                    )
+                    .await
+                    {
+                        warn!(error = %err, "Failed to run personality migration");
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, "Failed to deserialize config for personality migration");
+                }
+            }
+
+            let auth_manager = AuthManager::shared(
+                config.codex_home.clone(),
+                false,
+                config.cli_auth_credentials_store_mode,
+            );
+            cloud_requirements_loader(
+                auth_manager,
+                config.chatgpt_base_url,
+                config.codex_home.clone(),
+            )
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to preload config for cloud requirements");
+            // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
+            CloudRequirementsLoader::default()
+        }
+    };
     let loader_overrides_for_config_api = loader_overrides.clone();
     let mut config_warnings = Vec::new();
     let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides)
+        .cloud_requirements(cloud_requirements.clone())
         .build()
         .await
     {
         Ok(config) => config,
         Err(err) => {
-            let message = ConfigWarningNotification {
-                summary: "Invalid configuration; using defaults.".to_string(),
-                details: Some(err.to_string()),
-                path: None,
-                range: None,
-            };
+            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
             Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
                 std::io::Error::new(
@@ -669,16 +693,19 @@ where
         }
     };
 
-    if let Ok(Some(err)) =
-        check_execpolicy_for_warnings(&config.features, &config.config_layer_stack).await
-    {
+    if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
+        let (path, range) = exec_policy_warning_location(&err);
         let message = ConfigWarningNotification {
             summary: "Error parsing rules; custom rules not applied.".to_string(),
             details: Some(err.to_string()),
-            path: None,
-            range: None,
+            path,
+            range,
         };
         config_warnings.push(message);
+    }
+
+    if let Some(warning) = project_config_warning(&config) {
+        config_warnings.push(warning);
     }
 
     let feedback = CodexFeedback::new();
@@ -696,7 +723,7 @@ where
         )
     })?;
 
-    // Install a simple subscriber so `tracing` output is visible. Users can
+    // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
     let stderr_fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
@@ -724,40 +751,193 @@ where
         }
     }
 
-    // Task: process incoming messages.
+    let transport_event_tx_for_outbound = transport_event_tx.clone();
+    let outbound_handle = tokio::spawn(async move {
+        let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
+        let mut pending_closed_connections = VecDeque::<ConnectionId>::new();
+        loop {
+            tokio::select! {
+                biased;
+                event = outbound_control_rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
+                    match event {
+                        OutboundControlEvent::Opened {
+                            connection_id,
+                            writer,
+                            initialized,
+                            opted_out_notification_methods,
+                        } => {
+                            outbound_connections.insert(
+                                connection_id,
+                                OutboundConnectionState::new(
+                                    writer,
+                                    initialized,
+                                    opted_out_notification_methods,
+                                ),
+                            );
+                        }
+                        OutboundControlEvent::Closed { connection_id } => {
+                            outbound_connections.remove(&connection_id);
+                            pending_closed_connections.push_back(connection_id);
+                        }
+                    }
+                }
+                envelope = outgoing_rx.recv() => {
+                    let Some(envelope) = envelope else {
+                        break;
+                    };
+                    let disconnected_connections =
+                        route_outgoing_envelope(&mut outbound_connections, envelope).await;
+                    pending_closed_connections.extend(disconnected_connections);
+                }
+            }
+
+            while let Some(connection_id) = pending_closed_connections.front().copied() {
+                match transport_event_tx_for_outbound
+                    .try_send(TransportEvent::ConnectionClosed { connection_id })
+                {
+                    Ok(()) => {
+                        pending_closed_connections.pop_front();
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        break;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        return;
+                    }
+                }
+            }
+        }
+        info!("outbound router task exited (channel closed)");
+    });
+
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let outbound_control_tx = outbound_control_tx;
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
-        let mut processor = MessageProcessor::new(
-            outgoing_message_sender,
+        let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            outgoing: outgoing_message_sender,
             codex_linux_sandbox_exe,
-            std::sync::Arc::new(config),
+            config: Arc::new(config),
             cli_overrides,
             loader_overrides,
-            feedback.clone(),
+            cloud_requirements: cloud_requirements.clone(),
+            feedback: feedback.clone(),
             config_warnings,
-        );
+        });
         let mut thread_created_rx = processor.thread_created_receiver();
+        let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
         async move {
             let mut listen_for_threads = true;
             loop {
                 tokio::select! {
-                    msg = incoming_rx.recv() => {
-                        let Some(msg) = msg else {
+                    event = transport_event_rx.recv() => {
+                        let Some(event) = event else {
                             break;
                         };
-                        match msg {
-                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                            JSONRPCMessage::Error(e) => processor.process_error(e),
+                        match event {
+                            TransportEvent::ConnectionOpened { connection_id, writer } => {
+                                let outbound_initialized = Arc::new(AtomicBool::new(false));
+                                let outbound_opted_out_notification_methods =
+                                    Arc::new(RwLock::new(HashSet::new()));
+                                if outbound_control_tx
+                                    .send(OutboundControlEvent::Opened {
+                                        connection_id,
+                                        writer,
+                                        initialized: Arc::clone(&outbound_initialized),
+                                        opted_out_notification_methods: Arc::clone(
+                                            &outbound_opted_out_notification_methods,
+                                        ),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                connections.insert(
+                                    connection_id,
+                                    ConnectionState::new(
+                                        outbound_initialized,
+                                        outbound_opted_out_notification_methods,
+                                    ),
+                                );
+                            }
+                            TransportEvent::ConnectionClosed { connection_id } => {
+                                if outbound_control_tx
+                                    .send(OutboundControlEvent::Closed { connection_id })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                processor.connection_closed(connection_id).await;
+                                connections.remove(&connection_id);
+                                if shutdown_when_no_connections && connections.is_empty() {
+                                    break;
+                                }
+                            }
+                            TransportEvent::IncomingMessage { connection_id, message } => {
+                                match message {
+                                    JSONRPCMessage::Request(request) => {
+                                        let Some(connection_state) = connections.get_mut(&connection_id) else {
+                                            warn!("dropping request from unknown connection: {:?}", connection_id);
+                                            continue;
+                                        };
+                                        let was_initialized = connection_state.session.initialized;
+                                        processor
+                                            .process_request(
+                                                connection_id,
+                                                request,
+                                                &mut connection_state.session,
+                                                &connection_state.outbound_initialized,
+                                            )
+                                            .await;
+                                        if let Ok(mut opted_out_notification_methods) = connection_state
+                                            .outbound_opted_out_notification_methods
+                                            .write()
+                                        {
+                                            *opted_out_notification_methods = connection_state
+                                                .session
+                                                .opted_out_notification_methods
+                                                .clone();
+                                        }
+                                        if !was_initialized && connection_state.session.initialized {
+                                            processor.send_initialize_notifications().await;
+                                        }
+                                    }
+                                    JSONRPCMessage::Response(response) => {
+                                        processor.process_response(response).await;
+                                    }
+                                    JSONRPCMessage::Notification(notification) => {
+                                        processor.process_notification(notification).await;
+                                    }
+                                    JSONRPCMessage::Error(error) => {
+                                        processor.process_error(error).await;
+                                    }
+                                }
+                            }
                         }
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                processor.try_attach_thread_listener(thread_id).await;
+                                let initialized_connection_ids: Vec<ConnectionId> = connections
+                                    .iter()
+                                    .filter_map(|(connection_id, connection_state)| {
+                                        connection_state.session.initialized.then_some(*connection_id)
+                                    })
+                                    .collect();
+                                if !initialized_connection_ids.is_empty() {
+                                    processor
+                                        .try_attach_thread_listener(
+                                            thread_id,
+                                            initialized_connection_ids,
+                                        )
+                                        .await;
+                                }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 warn!("thread_created receiver lagged; skipping resync");
@@ -774,33 +954,14 @@ where
         }
     });
 
-    // Task: write outgoing messages to custom stdout stream.
-    let stdout_writer_handle = tokio::spawn(async move {
-        let mut stdout = stdout;
-        while let Some(outgoing_message) = outgoing_rx.recv().await {
-            let Ok(value) = serde_json::to_value(outgoing_message) else {
-                error!("Failed to convert OutgoingMessage to JSON value");
-                continue;
-            };
-            match serde_json::to_string(&value) {
-                Ok(mut json) => {
-                    json.push('\n');
-                    if let Err(e) = stdout.write_all(json.as_bytes()).await {
-                        error!("Failed to write to custom stdout: {e}");
-                        break;
-                    }
-                }
-                Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
-            }
-        }
+    drop(transport_event_tx);
 
-        info!("stdout writer exited (channel closed)");
-    });
+    let _ = processor_handle.await;
+    let _ = outbound_handle.await;
 
-    // Wait for all tasks to finish. The typical exit path is the stdin reader
-    // hitting EOF which, once it drops `incoming_tx`, propagates shutdown to
-    // the processor and then to the stdout task.
-    let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
+    for handle in stdio_handles {
+        let _ = handle.await;
+    }
 
     Ok(())
 }
