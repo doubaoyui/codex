@@ -197,7 +197,7 @@ impl ToolRegistry {
                 let output = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
-                
+
                 // Emit FunctionToolCall item for experimental tools
                 if should_emit {
                     emit_function_tool_call_item(
@@ -207,9 +207,10 @@ impl ToolRegistry {
                         &call_id_owned,
                         &payload_for_response,
                         &output,
-                    ).await;
+                    )
+                    .await;
                 }
-                
+
                 Ok(output.into_response(&call_id_owned, &payload_for_response))
             }
             Err(err) => Err(err),
@@ -222,7 +223,7 @@ fn should_emit_tool_call_item(tool_name: &str, payload: &ToolPayload) -> bool {
     if !matches!(payload, ToolPayload::Function { .. }) {
         return false;
     }
-    
+
     // List of tools that should emit items
     matches!(tool_name, "grep_files" | "read_file" | "list_dir")
 }
@@ -236,7 +237,7 @@ async fn emit_function_tool_call_item(
     output: &ToolOutput,
 ) {
     use codex_protocol::items::{FunctionToolCallItem, TurnItem};
-    
+
     let (arguments, content, success) = match output {
         ToolOutput::Function { body, success } => {
             let args = match payload {
@@ -247,7 +248,7 @@ async fn emit_function_tool_call_item(
         }
         _ => return, // Only handle Function outputs
     };
-    
+
     let item = TurnItem::FunctionToolCall(FunctionToolCallItem {
         id: call_id.to_string(),
         tool_name: tool_name.to_string(),
@@ -255,7 +256,7 @@ async fn emit_function_tool_call_item(
         output: content,
         success,
     });
-    
+
     // Emit started and completed events
     session.emit_turn_item_started(turn, &item).await;
     session.emit_turn_item_completed(turn, item).await;

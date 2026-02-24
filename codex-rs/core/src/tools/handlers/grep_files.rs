@@ -5,8 +5,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use globset::{Glob, GlobMatcher};
 use grep_regex::RegexMatcher;
-use grep_searcher::sinks::UTF8;
 use grep_searcher::Searcher;
+use grep_searcher::sinks::UTF8;
 use ignore::WalkBuilder;
 use serde::Deserialize;
 
@@ -159,9 +159,7 @@ async fn run_rg_search(
         .map_err(|_| {
             FunctionCallError::RespondToModel("Search timed out after 30 seconds".to_string())
         })?
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("Search task failed: {err}"))
-        })??;
+        .map_err(|err| FunctionCallError::RespondToModel(format!("Search task failed: {err}")))??;
 
     Ok(results)
 }
@@ -248,12 +246,13 @@ fn search_files_native(
     results_with_time.sort_by(|a, b| b.1.cmp(&a.1));
 
     // Extract just the paths
-    let results: Vec<String> = results_with_time.into_iter().map(|(path, _)| path).collect();
+    let results: Vec<String> = results_with_time
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
 
     Ok(results)
 }
-
-
 
 #[cfg(test)]
 mod tests {

@@ -70,6 +70,14 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
         model.model_messages = None;
     }
 
+    // Arthas: enable our default experimental toolset for GPT-5* models unless
+    // the model metadata explicitly opts into a different set.
+    if model.experimental_supported_tools.is_empty()
+        && uses_arthas_experimental_supported_tools(&model.slug)
+    {
+        model.experimental_supported_tools = arthas_default_experimental_supported_tools();
+    }
+
     model
 }
 
