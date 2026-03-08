@@ -286,6 +286,7 @@ where
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             writer: writer_tx,
+            disconnect_sender: None,
         })
         .await
         .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, "processor unavailable"))?;

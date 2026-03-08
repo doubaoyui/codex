@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -980,10 +981,20 @@ where
         }
     }
 
-    let transport_event_tx_for_outbound = transport_event_tx.clone();
+    let arg0_paths = Arg0DispatchPaths {
+        codex_linux_sandbox_exe,
+        main_execve_wrapper_exe: None,
+    };
+    let log_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .ok()
+    .map(log_db::start);
+
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
-        let mut pending_closed_connections = VecDeque::<ConnectionId>::new();
         loop {
             tokio::select! {
                 biased;
@@ -995,7 +1006,9 @@ where
                         OutboundControlEvent::Opened {
                             connection_id,
                             writer,
+                            disconnect_sender,
                             initialized,
+                            experimental_api_enabled,
                             opted_out_notification_methods,
                         } => {
                             outbound_connections.insert(
@@ -1003,13 +1016,17 @@ where
                                 OutboundConnectionState::new(
                                     writer,
                                     initialized,
+                                    experimental_api_enabled,
                                     opted_out_notification_methods,
+                                    disconnect_sender,
                                 ),
                             );
                         }
                         OutboundControlEvent::Closed { connection_id } => {
                             outbound_connections.remove(&connection_id);
-                            pending_closed_connections.push_back(connection_id);
+                        }
+                        OutboundControlEvent::DisconnectAll => {
+                            outbound_connections.clear();
                         }
                     }
                 }
@@ -1017,25 +1034,7 @@ where
                     let Some(envelope) = envelope else {
                         break;
                     };
-                    let disconnected_connections =
-                        route_outgoing_envelope(&mut outbound_connections, envelope).await;
-                    pending_closed_connections.extend(disconnected_connections);
-                }
-            }
-
-            while let Some(connection_id) = pending_closed_connections.front().copied() {
-                match transport_event_tx_for_outbound
-                    .try_send(TransportEvent::ConnectionClosed { connection_id })
-                {
-                    Ok(()) => {
-                        pending_closed_connections.pop_front();
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        break;
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        return;
-                    }
+                    route_outgoing_envelope(&mut outbound_connections, envelope).await;
                 }
             }
         }
@@ -1049,12 +1048,13 @@ where
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
-            codex_linux_sandbox_exe,
+            arg0_paths,
             config: Arc::new(config),
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
+            log_db,
             config_warnings,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
@@ -1068,15 +1068,25 @@ where
                             break;
                         };
                         match event {
-                            TransportEvent::ConnectionOpened { connection_id, writer } => {
+                            TransportEvent::ConnectionOpened {
+                                connection_id,
+                                writer,
+                                disconnect_sender,
+                            } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
+                                let outbound_experimental_api_enabled =
+                                    Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
+                                        disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
+                                        experimental_api_enabled: Arc::clone(
+                                            &outbound_experimental_api_enabled,
+                                        ),
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
                                         ),
@@ -1090,6 +1100,7 @@ where
                                     connection_id,
                                     ConnectionState::new(
                                         outbound_initialized,
+                                        outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,
                                     ),
                                 );
@@ -1120,6 +1131,7 @@ where
                                             .process_request(
                                                 connection_id,
                                                 request,
+                                                AppServerTransport::Stdio,
                                                 &mut connection_state.session,
                                                 &connection_state.outbound_initialized,
                                             )
@@ -1133,6 +1145,12 @@ where
                                                 .opted_out_notification_methods
                                                 .clone();
                                         }
+                                        connection_state
+                                            .outbound_experimental_api_enabled
+                                            .store(
+                                                connection_state.session.experimental_api_enabled,
+                                                std::sync::atomic::Ordering::Release,
+                                            );
                                         if !was_initialized && connection_state.session.initialized {
                                             processor.send_initialize_notifications().await;
                                         }
