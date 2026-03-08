@@ -842,8 +842,13 @@ where
         mpsc::channel::<OutboundControlEvent>(CHANNEL_CAPACITY);
 
     let mut stdio_handles = Vec::<JoinHandle<()>>::new();
-    start_custom_stdio_connection(stdin, stdout, transport_event_tx.clone(), &mut stdio_handles)
-        .await?;
+    start_custom_stdio_connection(
+        stdin,
+        stdout,
+        transport_event_tx.clone(),
+        &mut stdio_handles,
+    )
+    .await?;
     let shutdown_when_no_connections = true;
 
     // Parse CLI overrides once and derive the base Config eagerly so later
