@@ -124,6 +124,7 @@ impl ToolHandler for SearchToolBm25Handler {
             &turn.config,
         );
         let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
+        let mcp_tools = connectors::filter_codex_apps_tools_by_policy(mcp_tools, &turn.config);
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
@@ -267,6 +268,7 @@ mod tests {
             install_url: None,
             is_accessible: true,
             is_enabled: enabled,
+            plugin_display_names: Vec::new(),
         }
     }
 
@@ -294,6 +296,7 @@ mod tests {
                 },
                 connector_id: connector_id.map(str::to_string),
                 connector_name: connector_id.map(str::to_string),
+                plugin_display_names: Vec::new(),
             },
         )
     }

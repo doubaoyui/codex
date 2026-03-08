@@ -119,14 +119,6 @@ struct ResponseCompleted {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResponseDone {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    usage: Option<ResponseCompletedUsage>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ResponseCompletedUsage {
     input_tokens: i64,
     input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
@@ -167,6 +159,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
+    headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
@@ -179,20 +172,27 @@ impl ResponsesStreamEvent {
         &self.kind
     }
 
+    /// Returns the effective model reported by the server, if present.
+    ///
+    /// Precedence:
+    /// 1. `response.headers` for standard Responses stream events.
+    /// 2. top-level `headers` for websocket metadata events (for example
+    ///    `codex.response.metadata`).
     pub fn response_model(&self) -> Option<String> {
-        self.response.as_ref().and_then(extract_server_model)
-    }
-}
+        let response_headers_model = self
+            .response
+            .as_ref()
+            .and_then(|response| response.get("headers"))
+            .and_then(header_openai_model_value_from_json);
 
-fn extract_server_model(value: &Value) -> Option<String> {
-    value
-        .get("model")
-        .and_then(json_value_as_string)
-        .or_else(|| {
-            value
-                .get("headers")
-                .and_then(header_openai_model_value_from_json)
-        })
+        match response_headers_model {
+            Some(model) => Some(model),
+            None => self
+                .headers
+                .as_ref()
+                .and_then(header_openai_model_value_from_json),
+        }
+    }
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -316,7 +316,6 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
-                            can_append: false,
                         }));
                     }
                     Err(err) => {
@@ -326,31 +325,6 @@ pub fn process_responses_event(
                     }
                 }
             }
-        }
-        "response.done" => {
-            if let Some(resp_val) = event.response {
-                match serde_json::from_value::<ResponseDone>(resp_val) {
-                    Ok(resp) => {
-                        return Ok(Some(ResponseEvent::Completed {
-                            response_id: resp.id.unwrap_or_default(),
-                            token_usage: resp.usage.map(Into::into),
-                            can_append: true,
-                        }));
-                    }
-                    Err(err) => {
-                        let error = format!("failed to parse ResponseCompleted: {err}");
-                        debug!("{error}");
-                        return Err(ResponsesEventError::Api(ApiError::Stream(error)));
-                    }
-                }
-            }
-
-            debug!("response.done missing response payload");
-            return Ok(Some(ResponseEvent::Completed {
-                response_id: String::new(),
-                token_usage: None,
-                can_append: true,
-            }));
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
@@ -631,11 +605,9 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
-                assert!(!can_append);
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -670,69 +642,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_done_emits_incremental_completed() {
-        let done = json!({
-            "type": "response.done",
-            "response": {
-                "usage": {
-                    "input_tokens": 1,
-                    "input_tokens_details": null,
-                    "output_tokens": 2,
-                    "output_tokens_details": null,
-                    "total_tokens": 3
-                }
-            }
-        })
-        .to_string();
-
-        let sse1 = format!("event: response.done\ndata: {done}\n\n");
-
-        let events = collect_events(&[sse1.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
-            Ok(ResponseEvent::Completed {
-                response_id,
-                token_usage,
-                can_append,
-            }) => {
-                assert_eq!(response_id, "");
-                assert!(token_usage.is_some());
-                assert!(*can_append);
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn response_done_without_payload_emits_completed() {
-        let done = json!({
-            "type": "response.done"
-        })
-        .to_string();
-
-        let sse1 = format!("event: response.done\ndata: {done}\n\n");
-
-        let events = collect_events(&[sse1.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
-            Ok(ResponseEvent::Completed {
-                response_id,
-                token_usage,
-                can_append,
-            }) => {
-                assert_eq!(response_id, "");
-                assert!(token_usage.is_none());
-                assert!(*can_append);
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn emits_completed_without_stream_end() {
         let completed = json!({
             "type": "response.completed",
@@ -762,11 +671,9 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
-                assert!(!can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -963,7 +870,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_sse_emits_server_model_from_response_payload() {
+    async fn process_sse_ignores_response_model_field_in_payload() {
         let events = run_sse(vec![
             json!({
                 "type": "response.created",
@@ -982,18 +889,13 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 2);
+        assert_matches!(&events[0], ResponseEvent::Created);
         assert_matches!(
-            &events[0],
-            ResponseEvent::ServerModel(model) if model == CYBER_RESTRICTED_MODEL_FOR_TESTS
-        );
-        assert_matches!(&events[1], ResponseEvent::Created);
-        assert_matches!(
-            &events[2],
+            &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None,
-                can_append: false
+                token_usage: None
             } if response_id == "resp-1"
         );
     }
@@ -1029,49 +931,46 @@ mod tests {
             &events[2],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None,
-                can_append: false
+                token_usage: None
             } if response_id == "resp-1"
         );
     }
 
-    #[tokio::test]
-    async fn process_sse_emits_server_model_again_when_response_model_changes() {
-        let events = run_sse(vec![
-            json!({
-                "type": "response.created",
-                "response": {
-                    "id": "resp-1",
-                    "model": "gpt-5.2-codex"
-                }
-            }),
-            json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "resp-1",
-                    "model": "gpt-5.3-codex"
-                }
-            }),
-        ])
-        .await;
+    #[test]
+    fn responses_stream_event_response_model_reads_top_level_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS,
+            }
+        }))
+        .expect("expected event to deserialize");
 
-        assert_eq!(events.len(), 4);
-        assert_matches!(
-            &events[0],
-            ResponseEvent::ServerModel(model) if model == "gpt-5.2-codex"
+        assert_eq!(
+            ev.response_model().as_deref(),
+            Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
         );
-        assert_matches!(&events[1], ResponseEvent::Created);
-        assert_matches!(
-            &events[2],
-            ResponseEvent::ServerModel(model) if model == "gpt-5.3-codex"
-        );
-        assert_matches!(
-            &events[3],
-            ResponseEvent::Completed {
-                response_id,
-                token_usage: None,
-                can_append: false
-            } if response_id == "resp-1"
+    }
+
+    #[test]
+    fn responses_stream_event_response_model_prefers_response_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "headers": {
+                "openai-model": "top-level-model"
+            },
+            "response": {
+                "id": "resp-1",
+                "headers": {
+                    "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS
+                }
+            }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.response_model().as_deref(),
+            Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
         );
     }
 

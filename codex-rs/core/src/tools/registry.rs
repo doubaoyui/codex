@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::ToolInvocation;
@@ -81,7 +82,7 @@ impl ToolRegistry {
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
-        let otel = invocation.turn.otel_manager.clone();
+        let otel = invocation.turn.session_telemetry.clone();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
         let metric_tags = [
@@ -101,6 +102,29 @@ impl ToolRegistry {
                 sandbox_policy_tag(&invocation.turn.sandbox_policy),
             ),
         ];
+        let (mcp_server, mcp_server_origin) = match &invocation.payload {
+            ToolPayload::Mcp { server, .. } => {
+                let manager = invocation
+                    .session
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await;
+                let origin = manager.server_origin(server).map(str::to_owned);
+                (Some(server.clone()), origin)
+            }
+            _ => (None, None),
+        };
+        let mcp_server_ref = mcp_server.as_deref();
+        let mcp_server_origin_ref = mcp_server_origin.as_deref();
+
+        {
+            let mut active = invocation.session.active_turn.lock().await;
+            if let Some(active_turn) = active.as_mut() {
+                let mut turn_state = active_turn.turn_state.lock().await;
+                turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
+            }
+        }
 
         let session = invocation.session.clone();
         let turn = invocation.turn.clone();
@@ -119,6 +143,8 @@ impl ToolRegistry {
                     false,
                     &message,
                     &metric_tags,
+                    mcp_server_ref,
+                    mcp_server_origin_ref,
                 );
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -134,6 +160,8 @@ impl ToolRegistry {
                 false,
                 &message,
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
             );
             return Err(FunctionCallError::Fatal(message));
         }
@@ -149,6 +177,8 @@ impl ToolRegistry {
                 &call_id_owned,
                 log_payload.as_ref(),
                 &metric_tags,
+                mcp_server_ref,
+                mcp_server_origin_ref,
                 || {
                     let handler = handler.clone();
                     let output_cell = &output_cell;
@@ -177,6 +207,7 @@ impl ToolRegistry {
             Ok((preview, success)) => (preview.clone(), *success),
             Err(err) => (err.to_string(), false),
         };
+        emit_metric_for_tool_read(&invocation, success).await;
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
@@ -418,6 +449,7 @@ async fn dispatch_after_tool_use_hook(
         .dispatch(HookPayload {
             session_id: session.conversation_id,
             cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {
                 event: HookEventAfterToolUse {
