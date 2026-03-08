@@ -865,13 +865,51 @@
         },
         {
           "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "toolName": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "functionToolCall"
+              ],
+              "title": "FunctionToolCallThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "id",
+            "output",
+            "toolName",
+            "type"
+          ],
+          "title": "FunctionToolCallThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },
             "result": {
               "type": "string"
             },
-            "revisedPrompt": {
+            "revised_prompt": {
               "type": [
                 "string",
                 "null"

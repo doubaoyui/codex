@@ -6263,6 +6263,44 @@
         },
         {
           "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "FunctionToolCall"
+              ],
+              "title": "FunctionToolCallTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "id",
+            "output",
+            "tool_name",
+            "type"
+          ],
+          "title": "FunctionToolCallTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },

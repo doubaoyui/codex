@@ -13088,13 +13088,51 @@
         },
         {
           "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "toolName": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "functionToolCall"
+              ],
+              "title": "FunctionToolCallThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "id",
+            "output",
+            "toolName",
+            "type"
+          ],
+          "title": "FunctionToolCallThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },
             "result": {
               "type": "string"
             },
-            "revisedPrompt": {
+            "revised_prompt": {
               "type": [
                 "string",
                 "null"
@@ -14649,6 +14687,44 @@
             "type"
           ],
           "title": "ImageGenerationTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "FunctionToolCall"
+              ],
+              "title": "FunctionToolCallTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "id",
+            "output",
+            "tool_name",
+            "type"
+          ],
+          "title": "FunctionToolCallTurnItem",
           "type": "object"
         },
         {
