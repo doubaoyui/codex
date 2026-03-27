@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["code-mode"]
+code-mode = ["codex-core/code-mode"]
+
 [[bin]]
 name = "codex-app-server"
 path = "src/main.rs"
@@ -31,7 +35,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
-codex-core = { workspace = true }
+codex-core = { path = "../core", default-features = false }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }

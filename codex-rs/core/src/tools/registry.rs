@@ -429,11 +429,69 @@ impl ToolRegistry {
                 let result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+
+                // For historical compatibility, expose selected filesystem tools as first-class
+                // `TurnItem::FunctionToolCall` lifecycle items so UIs can render tool cards.
+                // Build the item synchronously so we don't hold a `&dyn ToolOutput` across awaits
+                // (ToolOutput is not required to be Sync).
+                let maybe_tool_call_item = should_emit_tool_call_item(tool_name.as_ref(), &payload_for_response)
+                    .then(|| {
+                        build_function_tool_call_item(
+                            tool_name.as_ref(),
+                            &call_id_owned,
+                            &payload_for_response,
+                            result.result.as_ref(),
+                        )
+                    })
+                    .flatten();
+                if let Some(item) = maybe_tool_call_item {
+                    invocation.session.emit_turn_item_started(invocation.turn.as_ref(), &item).await;
+                    invocation.session.emit_turn_item_completed(invocation.turn.as_ref(), item).await;
+                }
+
                 Ok(result)
             }
             Err(err) => Err(err),
         }
     }
+}
+
+fn should_emit_tool_call_item(tool_name: &str, payload: &ToolPayload) -> bool {
+    matches!(payload, ToolPayload::Function { .. })
+        && matches!(tool_name, "grep_files" | "read_file" | "list_dir")
+}
+
+fn build_function_tool_call_item(
+    tool_name: &str,
+    call_id: &str,
+    payload: &ToolPayload,
+    output: &dyn ToolOutput,
+) -> Option<codex_protocol::items::TurnItem> {
+    use codex_protocol::items::{FunctionToolCallItem, TurnItem};
+
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    // Convert the tool output into the same wire payload we send back to the model, then
+    // derive a readable string + success flag from it.
+    let response = output.to_response_item(call_id, payload);
+    let (output_text, success) = match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => (
+            output.body.to_text().unwrap_or_default(),
+            output.success,
+        ),
+        _ => return None,
+    };
+
+    Some(TurnItem::FunctionToolCall(FunctionToolCallItem {
+        id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        arguments: arguments.clone(),
+        output: output_text,
+        success,
+    }))
 }
 
 #[derive(Debug, Clone)]

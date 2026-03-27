@@ -7,6 +7,7 @@ pub(crate) use codex_code_mode::append_code_mode_sample;
 #[cfg(test)]
 pub(crate) use codex_code_mode::render_json_schema_to_typescript;
 
+#[cfg(feature = "code-mode")]
 pub(crate) fn augment_tool_spec_for_code_mode(spec: ToolSpec, code_mode_enabled: bool) -> ToolSpec {
     if !code_mode_enabled {
         return spec;
@@ -46,4 +47,9 @@ pub(crate) fn augment_tool_spec_for_code_mode(spec: ToolSpec, code_mode_enabled:
         }
         other => other,
     }
+}
+
+#[cfg(not(feature = "code-mode"))]
+pub(crate) fn augment_tool_spec_for_code_mode(spec: ToolSpec, _code_mode_enabled: bool) -> ToolSpec {
+    spec
 }

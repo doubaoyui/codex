@@ -4,6 +4,10 @@ license.workspace = true
 name = "codex-core"
 version.workspace = true
 
+[features]
+default = ["code-mode"]
+code-mode = ["dep:codex-code-mode"]
+
 [lib]
 doctest = false
 name = "codex_core"
@@ -31,7 +35,7 @@ codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
-codex-code-mode = { workspace = true }
+codex-code-mode = { workspace = true, optional = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core-skills = { workspace = true }
