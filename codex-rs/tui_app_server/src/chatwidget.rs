@@ -6008,6 +6008,25 @@ impl ChatWidget {
                     path: path.into(),
                 });
             }
+            ThreadItem::FunctionToolCall {
+                tool_name,
+                output,
+                success,
+                ..
+            } => {
+                let status = match success {
+                    Some(true) => "Called",
+                    Some(false) => "Failed",
+                    None => "Called",
+                };
+                let summary = if output.trim().is_empty() {
+                    format!("{status} {tool_name}")
+                } else {
+                    let output = truncate_text(&output, 240);
+                    format!("{status} {tool_name}: {output}")
+                };
+                self.on_agent_message(summary);
+            }
             ThreadItem::ImageGeneration {
                 id,
                 status,

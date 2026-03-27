@@ -32,6 +32,7 @@ mod stdio;
 mod websocket;
 
 pub(crate) use stdio::start_stdio_connection;
+pub(crate) use stdio::start_custom_stdio_connection;
 pub(crate) use websocket::start_websocket_acceptor;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

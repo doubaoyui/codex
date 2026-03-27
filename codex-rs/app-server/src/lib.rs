@@ -1010,9 +1010,11 @@ where
     }
 
     let arg0_paths = Arg0DispatchPaths {
+        codex_self_exe: None,
         codex_linux_sandbox_exe,
         main_execve_wrapper_exe: None,
     };
+    let environment_manager = Arc::new(EnvironmentManager::from_env());
     let log_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
@@ -1078,12 +1080,15 @@ where
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
+            environment_manager,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
             log_db,
             config_warnings,
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
@@ -1161,7 +1166,6 @@ where
                                                 request,
                                                 AppServerTransport::Stdio,
                                                 &mut connection_state.session,
-                                                &connection_state.outbound_initialized,
                                             )
                                             .await;
                                         if let Ok(mut opted_out_notification_methods) = connection_state
@@ -1179,7 +1183,19 @@ where
                                                 connection_state.session.experimental_api_enabled,
                                                 std::sync::atomic::Ordering::Release,
                                             );
+                                        connection_state
+                                            .outbound_initialized
+                                            .store(
+                                                connection_state.session.initialized,
+                                                std::sync::atomic::Ordering::Release,
+                                            );
                                         if !was_initialized && connection_state.session.initialized {
+                                            processor.connection_initialized(connection_id).await;
+                                            processor
+                                                .send_initialize_notifications_to_connection(
+                                                    connection_id,
+                                                )
+                                                .await;
                                             processor.send_initialize_notifications().await;
                                         }
                                     }
