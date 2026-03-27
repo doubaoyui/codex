@@ -14,16 +14,6 @@ use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
-#[ts(type = "string")]
-pub struct GitSha(pub String);
-
-impl GitSha {
-    pub fn new(sha: &str) -> Self {
-        Self(sha.to_string())
-    }
-}
-
 /// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
@@ -44,15 +34,15 @@ pub enum AuthMode {
 
 macro_rules! experimental_reason_expr {
     // If a request variant is explicitly marked experimental, that reason wins.
-    (#[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
+    (variant $variant:ident, #[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
         Some($reason)
     };
     // `inspect_params: true` is used when a method is mostly stable but needs
     // field-level gating from its params type (for example, ThreadStart).
-    ($params:ident, true) => {
+    (variant $variant:ident, $params:ident, true) => {
         crate::experimental_api::ExperimentalApi::experimental_reason($params)
     };
-    ($params:ident $(, $inspect_params:tt)?) => {
+    (variant $variant:ident, $params:ident $(, $inspect_params:tt)?) => {
         None
     };
 }
@@ -110,12 +100,33 @@ macro_rules! client_request_definitions {
             )*
         }
 
+        impl ClientRequest {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
                     $(
                         Self::$variant { params: _params, .. } => {
                             experimental_reason_expr!(
+                                variant $variant,
                                 $(#[experimental($reason)])?
                                 _params
                                 $(, $inspect_params)?
@@ -149,6 +160,12 @@ macro_rules! client_request_definitions {
                 <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
             )*
             Ok(())
+        }
+
+        pub(crate) fn visit_client_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
+            $(
+                v.visit::<$response>();
+            )*
         }
 
         #[allow(clippy::vec_init_then_push)]
@@ -207,6 +224,23 @@ client_request_definitions! {
         params: v2::ThreadUnsubscribeParams,
         response: v2::ThreadUnsubscribeResponse,
     },
+    #[experimental("thread/increment_elicitation")]
+    /// Increment the thread-local out-of-band elicitation counter.
+    ///
+    /// This is used by external helpers to pause timeout accounting while a user
+    /// approval or other elicitation is pending outside the app-server request flow.
+    ThreadIncrementElicitation => "thread/increment_elicitation" {
+        params: v2::ThreadIncrementElicitationParams,
+        response: v2::ThreadIncrementElicitationResponse,
+    },
+    #[experimental("thread/decrement_elicitation")]
+    /// Decrement the thread-local out-of-band elicitation counter.
+    ///
+    /// When the count reaches zero, timeout accounting resumes for the thread.
+    ThreadDecrementElicitation => "thread/decrement_elicitation" {
+        params: v2::ThreadDecrementElicitationParams,
+        response: v2::ThreadDecrementElicitationResponse,
+    },
     ThreadSetName => "thread/name/set" {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
@@ -222,6 +256,10 @@ client_request_definitions! {
     ThreadCompactStart => "thread/compact/start" {
         params: v2::ThreadCompactStartParams,
         response: v2::ThreadCompactStartResponse,
+    },
+    ThreadShellCommand => "thread/shellCommand" {
+        params: v2::ThreadShellCommandParams,
+        response: v2::ThreadShellCommandResponse,
     },
     #[experimental("thread/backgroundTerminals/clean")]
     ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
@@ -252,17 +290,49 @@ client_request_definitions! {
         params: v2::PluginListParams,
         response: v2::PluginListResponse,
     },
-    SkillsRemoteList => "skills/remote/list" {
-        params: v2::SkillsRemoteReadParams,
-        response: v2::SkillsRemoteReadResponse,
-    },
-    SkillsRemoteExport => "skills/remote/export" {
-        params: v2::SkillsRemoteWriteParams,
-        response: v2::SkillsRemoteWriteResponse,
+    PluginRead => "plugin/read" {
+        params: v2::PluginReadParams,
+        response: v2::PluginReadResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
+    },
+    FsReadFile => "fs/readFile" {
+        params: v2::FsReadFileParams,
+        response: v2::FsReadFileResponse,
+    },
+    FsWriteFile => "fs/writeFile" {
+        params: v2::FsWriteFileParams,
+        response: v2::FsWriteFileResponse,
+    },
+    FsCreateDirectory => "fs/createDirectory" {
+        params: v2::FsCreateDirectoryParams,
+        response: v2::FsCreateDirectoryResponse,
+    },
+    FsGetMetadata => "fs/getMetadata" {
+        params: v2::FsGetMetadataParams,
+        response: v2::FsGetMetadataResponse,
+    },
+    FsReadDirectory => "fs/readDirectory" {
+        params: v2::FsReadDirectoryParams,
+        response: v2::FsReadDirectoryResponse,
+    },
+    FsRemove => "fs/remove" {
+        params: v2::FsRemoveParams,
+        response: v2::FsRemoveResponse,
+    },
+    FsCopy => "fs/copy" {
+        params: v2::FsCopyParams,
+        response: v2::FsCopyResponse,
+    },
+    FsWatch => "fs/watch" {
+        params: v2::FsWatchParams,
+        response: v2::FsWatchResponse,
+    },
+    FsUnwatch => "fs/unwatch" {
+        params: v2::FsUnwatchParams,
+        response: v2::FsUnwatchResponse,
     },
     SkillsConfigWrite => "skills/config/write" {
         params: v2::SkillsConfigWriteParams,
@@ -271,6 +341,10 @@ client_request_definitions! {
     PluginInstall => "plugin/install" {
         params: v2::PluginInstallParams,
         response: v2::PluginInstallResponse,
+    },
+    PluginUninstall => "plugin/uninstall" {
+        params: v2::PluginUninstallParams,
+        response: v2::PluginUninstallResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
@@ -317,6 +391,10 @@ client_request_definitions! {
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
         response: v2::ExperimentalFeatureListResponse,
+    },
+    ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
+        params: v2::ExperimentalFeatureEnablementSetParams,
+        response: v2::ExperimentalFeatureEnablementSetResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
@@ -525,6 +603,12 @@ macro_rules! server_request_definitions {
             Ok(())
         }
 
+        pub(crate) fn visit_server_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
+            $(
+                v.visit::<$response>();
+            )*
+        }
+
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
             out_dir: &Path,
@@ -675,6 +759,12 @@ server_request_definitions! {
         response: v2::McpServerElicitationRequestResponse,
     },
 
+    /// Request approval for additional permissions from the user.
+    PermissionsRequestApproval => "item/permissions/requestApproval" {
+        params: v2::PermissionsRequestApprovalParams,
+        response: v2::PermissionsRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -716,9 +806,18 @@ pub struct FuzzyFileSearchParams {
 pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
+    pub match_type: FuzzyFileSearchMatchType,
     pub file_name: String,
     pub score: u32,
     pub indices: Option<Vec<u32>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum FuzzyFileSearchMatchType {
+    File,
+    Directory,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -786,10 +885,14 @@ server_notification_definitions! {
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    HookStarted => "hook/started" (v2::HookStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    HookCompleted => "hook/completed" (v2::HookCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
+    ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
+    ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.
     RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
@@ -804,9 +907,11 @@ server_notification_definitions! {
     ServerRequestResolved => "serverRequest/resolved" (v2::ServerRequestResolvedNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
+    McpServerStatusUpdated => "mcpServer/startupStatus/updated" (v2::McpServerStatusUpdatedNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
+    FsChanged => "fs/changed" (v2::FsChangedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
@@ -821,6 +926,8 @@ server_notification_definitions! {
     ThreadRealtimeStarted => "thread/realtime/started" (v2::ThreadRealtimeStartedNotification),
     #[experimental("thread/realtime/itemAdded")]
     ThreadRealtimeItemAdded => "thread/realtime/itemAdded" (v2::ThreadRealtimeItemAddedNotification),
+    #[experimental("thread/realtime/transcriptUpdated")]
+    ThreadRealtimeTranscriptUpdated => "thread/realtime/transcriptUpdated" (v2::ThreadRealtimeTranscriptUpdatedNotification),
     #[experimental("thread/realtime/outputAudio/delta")]
     ThreadRealtimeOutputAudioDelta => "thread/realtime/outputAudio/delta" (v2::ThreadRealtimeOutputAudioDeltaNotification),
     #[experimental("thread/realtime/error")]
@@ -850,13 +957,23 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
 
+    fn absolute_path_string(path: &str) -> String {
+        let trimmed = path.trim_start_matches('/');
+        if cfg!(windows) {
+            format!(r"C:\{}", trimmed.replace('/', "\\"))
+        } else {
+            format!("/{trimmed}")
+        }
+    }
+
     fn absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+        AbsolutePathBuf::from_absolute_path(absolute_path_string(path)).expect("absolute path")
     }
 
     #[test]
@@ -893,7 +1010,7 @@ mod tests {
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
                     opt_out_notification_methods: Some(vec![
-                        "codex/event/session_configured".to_string(),
+                        "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
                     ]),
                 }),
@@ -913,7 +1030,7 @@ mod tests {
                     "capabilities": {
                         "experimentalApi": true,
                         "optOutNotificationMethods": [
-                            "codex/event/session_configured",
+                            "thread/started",
                             "item/agentMessage/delta"
                         ]
                     }
@@ -938,7 +1055,7 @@ mod tests {
                 "capabilities": {
                     "experimentalApi": true,
                     "optOutNotificationMethods": [
-                        "codex/event/session_configured",
+                        "thread/started",
                         "item/agentMessage/delta"
                     ]
                 }
@@ -958,7 +1075,7 @@ mod tests {
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
                         opt_out_notification_methods: Some(vec![
-                            "codex/event/session_configured".to_string(),
+                            "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
                         ]),
                     }),
@@ -1136,6 +1253,8 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: None,
         };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/rateLimits/read");
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
@@ -1352,6 +1471,48 @@ mod tests {
     }
 
     #[test]
+    fn serialize_fs_get_metadata() -> Result<()> {
+        let request = ClientRequest::FsGetMetadata {
+            request_id: RequestId::Integer(9),
+            params: v2::FsGetMetadataParams {
+                path: absolute_path("tmp/example"),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "fs/getMetadata",
+                "id": 9,
+                "params": {
+                    "path": absolute_path_string("tmp/example")
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_fs_watch() -> Result<()> {
+        let request = ClientRequest::FsWatch {
+            request_id: RequestId::Integer(10),
+            params: v2::FsWatchParams {
+                path: absolute_path("tmp/repo/.git"),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "fs/watch",
+                "id": 10,
+                "params": {
+                    "path": absolute_path_string("tmp/repo/.git")
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_list_experimental_features() -> Result<()> {
         let request = ClientRequest::ExperimentalFeatureList {
             request_id: RequestId::Integer(8),
@@ -1449,6 +1610,7 @@ mod tests {
                     sample_rate: 24_000,
                     num_channels: 1,
                     samples_per_channel: Some(512),
+                    item_id: None,
                 },
             },
         );
@@ -1461,7 +1623,8 @@ mod tests {
                         "data": "AQID",
                         "sampleRate": 24000,
                         "numChannels": 1,
-                        "samplesPerChannel": 512
+                        "samplesPerChannel": 512,
+                        "itemId": null
                     }
                 }
             }),
@@ -1498,6 +1661,7 @@ mod tests {
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
                 session_id: Some("sess_456".to_string()),
+                version: RealtimeConversationVersion::V1,
             });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
         assert_eq!(reason, Some("thread/realtime/started"));
@@ -1513,6 +1677,7 @@ mod tests {
                     sample_rate: 24_000,
                     num_channels: 1,
                     samples_per_channel: Some(512),
+                    item_id: None,
                 },
             },
         );
@@ -1538,7 +1703,6 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/allowed")]),
                     write: None,
                 }),
-                macos: None,
             }),
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -37,6 +38,7 @@ use rmcp::model::ResourceTemplate;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
+use rmcp::model::ToolAnnotations;
 use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -44,6 +46,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::task;
+use tokio::time::sleep;
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -82,11 +85,13 @@ impl TestToolServer {
         }))
         .expect("echo tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("echo"),
             Cow::Borrowed("Echo back the provided message and include environment data."),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn memo_resource() -> Resource {
@@ -275,15 +280,25 @@ fn parse_bind_addr() -> Result<SocketAddr, Box<dyn std::error::Error>> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
     let session_failure_state = SessionFailureState::default();
-    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-            eprintln!(
-                "failed to bind to {bind_addr}: {err}. make sure the process has network access"
-            );
-            return Ok(());
+    const MAX_BIND_RETRIES: u32 = 20;
+    const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    let mut bind_retries = 0;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(&bind_addr).await {
+            Ok(listener) => break listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "failed to bind to {bind_addr}: {err}. make sure the process has network access"
+                );
+                return Ok(());
+            }
+            Err(err) if err.kind() == ErrorKind::AddrInUse && bind_retries < MAX_BIND_RETRIES => {
+                bind_retries += 1;
+                sleep(BIND_RETRY_DELAY).await;
+            }
+            Err(err) => return Err(err.into()),
         }
-        Err(err) => return Err(err.into()),
     };
     eprintln!("starting rmcp streamable http test server on http://{bind_addr}/mcp");
 

@@ -1,5 +1,6 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::RequestId;
@@ -19,6 +21,7 @@ use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::protocol::TokenUsage;
 use crate::tasks::SessionTask;
+use codex_protocol::models::PermissionProfile;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -73,10 +76,12 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
@@ -99,10 +104,26 @@ impl TurnState {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
+        self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+    }
+
+    pub(crate) fn insert_pending_request_permissions(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<RequestPermissionsResponse>,
+    ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
+        self.pending_request_permissions.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_request_permissions(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
+        self.pending_request_permissions.remove(key)
     }
 
     pub(crate) fn insert_pending_user_input(
@@ -158,6 +179,15 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
+    }
+
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
@@ -168,8 +198,21 @@ impl TurnState {
         }
     }
 
+    pub(crate) fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
+        self.pending_input.clone()
+    }
+
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
+    }
+
+    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+        self.granted_permissions =
+            merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
+    }
+
+    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+        self.granted_permissions.clone()
     }
 }
 
