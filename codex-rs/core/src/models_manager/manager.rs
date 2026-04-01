@@ -397,12 +397,12 @@ impl ModelsManager {
         }
 
         // Historically we only refreshed `/models` when ChatGPT auth is present.
-        // Arthas uses ApiKey auth stored by Codex (`requires_openai_auth=true`), so also allow
-        // refresh in ApiKey mode for those providers.
+        // Arthas also needs remote `/models` while using ApiKey auth, but keep that exception
+        // narrowly scoped so other ApiKey providers continue using the old behavior.
         let auth_mode = self.auth_manager.auth_mode();
         let allow_online_refresh = match auth_mode {
             Some(AuthMode::Chatgpt) => true,
-            Some(AuthMode::ApiKey) => self.provider.requires_openai_auth,
+            Some(AuthMode::ApiKey) => self.provider.name == "arthas",
             _ => false,
         };
         if !allow_online_refresh {

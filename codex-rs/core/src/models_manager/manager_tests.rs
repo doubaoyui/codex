@@ -587,7 +587,7 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
 }
 
 #[tokio::test]
-async fn refresh_available_models_allows_network_with_api_key_auth_when_provider_requires_auth() {
+async fn refresh_available_models_allows_network_with_api_key_auth_for_arthas_provider() {
     let server = MockServer::start().await;
     let dynamic_slug = "dynamic-model-only-for-test-apikey";
     let models_mock = mount_models_once(
@@ -601,7 +601,7 @@ async fn refresh_available_models_allows_network_with_api_key_auth_when_provider
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
     let mut provider = provider_for(server.uri());
-    provider.requires_openai_auth = true;
+    provider.name = "arthas".into();
     let manager = ModelsManager::with_provider_for_tests(
         codex_home.path().to_path_buf(),
         auth_manager,
