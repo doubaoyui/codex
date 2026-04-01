@@ -4,6 +4,18 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn test_get_codex_user_agent_uses_build_version_override_when_set() {
+    unsafe {
+        std::env::set_var(CODEX_INTERNAL_BUILD_VERSION_OVERRIDE_ENV_VAR, "9.9.9-test");
+    }
+    let user_agent = get_codex_user_agent();
+    assert!(user_agent.contains("/9.9.9-test "), "ua={user_agent}");
+    unsafe {
+        std::env::remove_var(CODEX_INTERNAL_BUILD_VERSION_OVERRIDE_ENV_VAR);
+    }
+}
+
+#[test]
 fn test_get_codex_user_agent() {
     let user_agent = get_codex_user_agent();
     let originator = originator().value;

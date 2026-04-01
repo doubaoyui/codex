@@ -601,7 +601,7 @@ async fn refresh_available_models_allows_network_with_api_key_auth_for_arthas_pr
     let codex_home = tempdir().expect("temp dir");
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
     let mut provider = provider_for(server.uri());
-    provider.name = "arthas".into();
+    provider.name = "Arthas Gateway".into();
     let manager = ModelsManager::with_provider_for_tests(
         codex_home.path().to_path_buf(),
         auth_manager,
@@ -624,6 +624,47 @@ async fn refresh_available_models_allows_network_with_api_key_auth_for_arthas_pr
         models_mock.requests().len(),
         1,
         "api key auth should allow /models requests"
+    );
+}
+
+#[tokio::test]
+async fn refresh_available_models_skips_network_with_api_key_auth_for_non_arthas_provider() {
+    let server = MockServer::start().await;
+    let dynamic_slug = "dynamic-model-only-for-test-non-arthas";
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model(dynamic_slug, "Other", 1)],
+        },
+    )
+    .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    let mut provider = provider_for(server.uri());
+    provider.name = "OpenAI Compatible".into();
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh should not fail for non-arthas provider");
+
+    let cached_remote = manager.get_remote_models().await;
+    assert!(
+        !cached_remote
+            .iter()
+            .any(|candidate| candidate.slug == dynamic_slug),
+        "non-arthas api key provider should not refresh /models online"
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        0,
+        "non-arthas api key provider should skip /models requests"
     );
 }
 

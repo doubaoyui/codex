@@ -184,6 +184,11 @@ pub struct ModelsManager {
 }
 
 impl ModelsManager {
+    fn is_arthas_provider(&self) -> bool {
+        let normalized = self.provider.name.trim().to_ascii_lowercase();
+        normalized == "arthas" || normalized == "arthas gateway"
+    }
+
     /// Construct a manager scoped to the provided `AuthManager`.
     ///
     /// Uses `codex_home` to store cached model metadata and initializes with bundled catalog
@@ -402,7 +407,7 @@ impl ModelsManager {
         let auth_mode = self.auth_manager.auth_mode();
         let allow_online_refresh = match auth_mode {
             Some(AuthMode::Chatgpt) => true,
-            Some(AuthMode::ApiKey) => self.provider.name == "arthas",
+            Some(AuthMode::ApiKey) => self.is_arthas_provider(),
             _ => false,
         };
         if !allow_online_refresh {
