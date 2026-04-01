@@ -586,6 +586,47 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     );
 }
 
+#[tokio::test]
+async fn refresh_available_models_allows_network_with_api_key_auth_when_provider_requires_auth() {
+    let server = MockServer::start().await;
+    let dynamic_slug = "dynamic-model-only-for-test-apikey";
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model(dynamic_slug, "ApiKey", 1)],
+        },
+    )
+    .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    let mut provider = provider_for(server.uri());
+    provider.requires_openai_auth = true;
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh should fetch with api key auth");
+
+    let cached_remote = manager.get_remote_models().await;
+    assert!(
+        cached_remote
+            .iter()
+            .any(|candidate| candidate.slug == dynamic_slug),
+        "remote refresh should include dynamic model"
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "api key auth should allow /models requests"
+    );
+}
+
 #[test]
 fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
