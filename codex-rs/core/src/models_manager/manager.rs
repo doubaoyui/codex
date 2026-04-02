@@ -184,11 +184,6 @@ pub struct ModelsManager {
 }
 
 impl ModelsManager {
-    fn is_arthas_provider(&self) -> bool {
-        let normalized = self.provider.name.trim().to_ascii_lowercase();
-        normalized == "arthas" || normalized == "arthas gateway"
-    }
-
     /// Construct a manager scoped to the provided `AuthManager`.
     ///
     /// Uses `codex_home` to store cached model metadata and initializes with bundled catalog
@@ -402,14 +397,8 @@ impl ModelsManager {
         }
 
         // Historically we only refreshed `/models` when ChatGPT auth is present.
-        // Arthas also needs remote `/models` while using ApiKey auth, but keep that exception
-        // narrowly scoped so other ApiKey providers continue using the old behavior.
         let auth_mode = self.auth_manager.auth_mode();
-        let allow_online_refresh = match auth_mode {
-            Some(AuthMode::Chatgpt) => true,
-            Some(AuthMode::ApiKey) => self.is_arthas_provider(),
-            _ => false,
-        };
+        let allow_online_refresh = matches!(auth_mode, Some(AuthMode::Chatgpt));
         if !allow_online_refresh {
             if matches!(
                 refresh_strategy,

@@ -587,7 +587,7 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
 }
 
 #[tokio::test]
-async fn refresh_available_models_allows_network_with_api_key_auth_for_arthas_provider() {
+async fn refresh_available_models_skips_network_with_api_key_auth_even_for_arthas_provider() {
     let server = MockServer::start().await;
     let dynamic_slug = "dynamic-model-only-for-test-apikey";
     let models_mock = mount_models_once(
@@ -611,19 +611,19 @@ async fn refresh_available_models_allows_network_with_api_key_auth_for_arthas_pr
     manager
         .refresh_available_models(RefreshStrategy::OnlineIfUncached)
         .await
-        .expect("refresh should fetch with api key auth");
+        .expect("refresh should not fail for api key auth");
 
     let cached_remote = manager.get_remote_models().await;
     assert!(
-        cached_remote
+        !cached_remote
             .iter()
             .any(|candidate| candidate.slug == dynamic_slug),
-        "remote refresh should include dynamic model"
+        "api key auth should not refresh /models online"
     );
     assert_eq!(
         models_mock.requests().len(),
-        1,
-        "api key auth should allow /models requests"
+        0,
+        "api key auth should skip /models requests"
     );
 }
 
