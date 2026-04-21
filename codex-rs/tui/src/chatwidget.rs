@@ -6288,6 +6288,10 @@ impl ChatWidget {
             ThreadItem::ImageView { id, path } => {
                 self.on_view_image_tool_call(ViewImageToolCallEvent { call_id: id, path });
             }
+            ThreadItem::FunctionToolCall { .. } => {
+                // Desktop Arthas consumes these fs-tool call records directly in the frontend.
+                // Upstream TUI does not render them yet, so ignore them during replay.
+            }
             ThreadItem::ImageGeneration {
                 id,
                 status,
