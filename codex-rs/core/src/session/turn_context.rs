@@ -5,7 +5,7 @@ use codex_model_provider::create_model_provider;
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     matches!(
         auth_manager.and_then(AuthManager::auth_mode),
-        Some(AuthMode::Chatgpt)
+        Some(AuthMode::Chatgpt | AuthMode::ApiKey)
     )
 }
 

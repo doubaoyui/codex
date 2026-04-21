@@ -154,8 +154,8 @@ impl ToolsConfig {
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(model_info);
-        // API-key auth bypasses Codex backend entitlement/tool normalization, so
-        // callers must confirm ChatGPT auth before exposing the built-in tool.
+        // Callers decide whether the built-in image-generation tool is allowed for
+        // the current auth/provider path.
         let include_image_gen_tool = *image_generation_tool_auth_allowed
             && features.enabled(Feature::ImageGeneration)
             && supports_image_generation(model_info);
