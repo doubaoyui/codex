@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use globset::{Glob, GlobMatcher};
 use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
@@ -40,7 +39,6 @@ struct GrepFilesArgs {
     limit: usize,
 }
 
-#[async_trait]
 impl ToolHandler for GrepFilesHandler {
     type Output = FunctionToolOutput;
 

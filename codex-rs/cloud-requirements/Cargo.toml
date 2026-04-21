@@ -13,6 +13,8 @@ base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-backend-client = { workspace = true }
 codex-core = { path = "../core", default-features = false }
+codex-config = { workspace = true }
+codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 hmac = "0.12.1"

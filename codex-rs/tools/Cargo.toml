@@ -4,10 +4,20 @@ license.workspace = true
 name = "codex-tools"
 version.workspace = true
 
+[features]
+default = ["code-mode"]
+code-mode = ["dep:codex-code-mode"]
+
 [lints]
 workspace = true
 
 [dependencies]
+codex-app-server-protocol = { workspace = true }
+codex-code-mode = { workspace = true, optional = true }
+codex-features = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-pty = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
     "macros",
@@ -16,6 +26,7 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
