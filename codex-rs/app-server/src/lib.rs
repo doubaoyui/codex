@@ -906,6 +906,7 @@ pub async fn run_main_with_transport(
 pub async fn run_with_streams<R, W>(
     stdin: R,
     stdout: W,
+    codex_self_exe: Option<PathBuf>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
@@ -916,7 +917,7 @@ where
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let arg0_paths = Arg0DispatchPaths {
-        codex_self_exe: None,
+        codex_self_exe,
         codex_linux_sandbox_exe,
         main_execve_wrapper_exe: None,
     };
