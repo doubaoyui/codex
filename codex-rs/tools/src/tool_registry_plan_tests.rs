@@ -452,7 +452,13 @@ fn disabled_environment_omits_environment_backed_tools() {
     .with_has_environment(/*has_environment*/ false);
     tools_config
         .experimental_supported_tools
+        .push("grep_files".to_string());
+    tools_config
+        .experimental_supported_tools
         .push("list_dir".to_string());
+    tools_config
+        .experimental_supported_tools
+        .push("read_file".to_string());
     let (tools, _) = build_specs(
         &tools_config,
         /*mcp_tools*/ None,
@@ -465,8 +471,60 @@ fn disabled_environment_omits_environment_backed_tools() {
     assert_lacks_tool_name(&tools, "js_repl");
     assert_lacks_tool_name(&tools, "js_repl_reset");
     assert_lacks_tool_name(&tools, "apply_patch");
+    assert_lacks_tool_name(&tools, "grep_files");
     assert_lacks_tool_name(&tools, "list_dir");
+    assert_lacks_tool_name(&tools, "read_file");
     assert_lacks_tool_name(&tools, VIEW_IMAGE_TOOL_NAME);
+}
+
+#[test]
+fn experimental_supported_tools_enable_arthas_filesystem_tools() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    tools_config
+        .experimental_supported_tools
+        .push("grep_files".to_string());
+    tools_config
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+    tools_config
+        .experimental_supported_tools
+        .push("read_file".to_string());
+
+    let (tools, handlers) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    assert_contains_tool_names(&tools, &["grep_files", "list_dir", "read_file"]);
+    assert!(
+        handlers
+            .iter()
+            .any(|h| h.name.to_string() == "grep_files")
+    );
+    assert!(
+        handlers
+            .iter()
+            .any(|h| h.name.to_string() == "list_dir")
+    );
+    assert!(
+        handlers
+            .iter()
+            .any(|h| h.name.to_string() == "read_file")
+    );
 }
 
 #[test]
