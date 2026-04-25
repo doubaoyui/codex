@@ -6315,6 +6315,7 @@ impl ChatWidget {
                 self.add_info_message("Context compacted".to_string(), /*hint*/ None);
             }
             ThreadItem::HookPrompt { .. } => {}
+            ThreadItem::FunctionToolCall { .. } => {}
             ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
