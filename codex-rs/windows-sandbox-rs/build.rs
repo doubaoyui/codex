@@ -1,4 +1,8 @@
 fn main() {
+    if std::env::var_os("CODEX_WINDOWS_SANDBOX_EMBED_MANIFEST").is_none() {
+        return;
+    }
+
     if std::env::var_os("RULES_RUST_BAZEL_BUILD_SCRIPT_RUNNER").is_some()
         && matches!(std::env::var("CARGO_CFG_TARGET_ENV").as_deref(), Ok("gnu"))
     {
