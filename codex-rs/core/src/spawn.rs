@@ -9,6 +9,9 @@ use tracing::trace;
 
 use codex_protocol::permissions::NetworkSandboxPolicy;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Experimental environment variable that will be set to some non-empty value
 /// if both of the following are true:
 ///
@@ -74,6 +77,11 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
     }
     cmd.env_clear();
     cmd.envs(env);
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     if !network_sandbox_policy.is_enabled() {
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");

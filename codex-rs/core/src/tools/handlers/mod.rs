@@ -1,6 +1,7 @@
 pub(crate) mod agent_jobs;
 pub(crate) mod apply_patch;
 mod dynamic;
+mod grep_files;
 mod js_repl;
 mod list_dir;
 mod mcp;
@@ -9,6 +10,7 @@ pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
 pub(crate) mod multi_agents_v2;
 mod plan;
+mod read_file;
 mod request_permissions;
 mod request_user_input;
 mod shell;
@@ -31,18 +33,22 @@ use std::path::Path;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
+#[cfg(feature = "code-mode")]
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
+#[cfg(feature = "code-mode")]
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
+pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
 pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use plan::PlanHandler;
+pub use read_file::ReadFileHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub use shell::ShellCommandHandler;

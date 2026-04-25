@@ -4,6 +4,7 @@
 mod agent_job_tool;
 mod agent_tool;
 mod apply_patch_tool;
+#[cfg(feature = "code-mode")]
 mod code_mode;
 mod dynamic_tool;
 mod image_detail;
@@ -43,11 +44,17 @@ pub use agent_tool::create_wait_agent_tool_v2;
 pub use apply_patch_tool::ApplyPatchToolArgs;
 pub use apply_patch_tool::create_apply_patch_freeform_tool;
 pub use apply_patch_tool::create_apply_patch_json_tool;
+#[cfg(feature = "code-mode")]
 pub use code_mode::augment_tool_spec_for_code_mode;
+#[cfg(feature = "code-mode")]
 pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
+#[cfg(feature = "code-mode")]
 pub use code_mode::collect_code_mode_tool_definitions;
+#[cfg(feature = "code-mode")]
 pub use code_mode::create_code_mode_tool;
+#[cfg(feature = "code-mode")]
 pub use code_mode::create_wait_tool;
+#[cfg(feature = "code-mode")]
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
@@ -139,7 +146,9 @@ pub use tool_suggest::ToolSuggestResult;
 pub use tool_suggest::all_suggested_connectors_picked_up;
 pub use tool_suggest::build_tool_suggestion_elicitation_request;
 pub use tool_suggest::verified_connector_suggestion_completed;
+pub use utility_tool::create_grep_files_tool;
 pub use utility_tool::create_list_dir_tool;
+pub use utility_tool::create_read_file_tool;
 pub use utility_tool::create_test_sync_tool;
 pub use view_image::ViewImageToolOptions;
 pub use view_image::create_view_image_tool;

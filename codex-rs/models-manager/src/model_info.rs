@@ -20,6 +20,24 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
+fn arthas_default_experimental_supported_tools() -> Vec<String> {
+    vec![
+        "grep_files".to_string(),
+        "list_dir".to_string(),
+        "read_file".to_string(),
+    ]
+}
+
+fn uses_arthas_experimental_supported_tools(slug: &str) -> bool {
+    slug.starts_with("gpt-5")
+        || slug.starts_with("gpt-5.1")
+        || slug.starts_with("gpt-5.2")
+        || slug.starts_with("gpt-5-codex")
+        || slug.starts_with("gpt-5.1-codex")
+        || slug.starts_with("gpt-5.2-codex")
+        || slug.starts_with("codex-")
+}
+
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
         && supports_reasoning_summaries
@@ -59,6 +77,12 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         model.model_messages = None;
     }
 
+    if model.experimental_supported_tools.is_empty()
+        && uses_arthas_experimental_supported_tools(&model.slug)
+    {
+        model.experimental_supported_tools = arthas_default_experimental_supported_tools();
+    }
+
     model
 }
 
@@ -93,7 +117,11 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         max_context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
-        experimental_supported_tools: Vec::new(),
+        experimental_supported_tools: if uses_arthas_experimental_supported_tools(slug) {
+            arthas_default_experimental_supported_tools()
+        } else {
+            Vec::new()
+        },
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,

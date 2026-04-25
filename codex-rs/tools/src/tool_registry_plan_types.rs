@@ -4,6 +4,7 @@ use crate::ToolName;
 use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::WaitAgentTimeoutOptions;
+#[cfg(feature = "code-mode")]
 use crate::augment_tool_spec_for_code_mode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ pub enum ToolHandlerKind {
     CodeModeWait,
     DynamicTool,
     FollowupTaskV2,
+    GrepFiles,
     JsRepl,
     JsReplReset,
     ListAgentsV2,
@@ -25,6 +27,7 @@ pub enum ToolHandlerKind {
     Mcp,
     McpResource,
     Plan,
+    ReadFile,
     RequestPermissions,
     RequestUserInput,
     ResumeAgentV1,
@@ -104,7 +107,14 @@ impl ToolRegistryPlan {
         code_mode_enabled: bool,
     ) {
         let spec = if code_mode_enabled {
-            augment_tool_spec_for_code_mode(spec)
+            #[cfg(feature = "code-mode")]
+            {
+                augment_tool_spec_for_code_mode(spec)
+            }
+            #[cfg(not(feature = "code-mode"))]
+            {
+                spec
+            }
         } else {
             spec
         };

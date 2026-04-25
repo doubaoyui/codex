@@ -4,12 +4,16 @@ license.workspace = true
 name = "codex-tools"
 version.workspace = true
 
+[features]
+default = ["code-mode"]
+code-mode = ["dep:codex-code-mode"]
+
 [lints]
 workspace = true
 
 [dependencies]
 codex-app-server-protocol = { workspace = true }
-codex-code-mode = { workspace = true }
+codex-code-mode = { workspace = true, optional = true }
 codex-features = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

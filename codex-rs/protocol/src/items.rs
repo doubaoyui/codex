@@ -33,6 +33,7 @@ pub enum TurnItem {
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ImageGeneration(ImageGenerationItem),
+    FunctionToolCall(FunctionToolCallItem),
     ContextCompaction(ContextCompactionItem),
 }
 
@@ -130,6 +131,15 @@ pub struct ImageGenerationItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ContextCompactionItem {
     pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct FunctionToolCallItem {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub output: String,
+    pub success: Option<bool>,
 }
 
 impl ContextCompactionItem {
@@ -392,6 +402,7 @@ impl TurnItem {
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
+            TurnItem::FunctionToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
@@ -405,6 +416,7 @@ impl TurnItem {
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
+            TurnItem::FunctionToolCall(_) => Vec::new(),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }
     }

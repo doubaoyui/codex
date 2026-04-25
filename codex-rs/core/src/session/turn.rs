@@ -1030,6 +1030,7 @@ async fn run_sampling_request(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
+    #[cfg(feature = "code-mode")]
     let _code_mode_worker = sess
         .services
         .code_mode_service

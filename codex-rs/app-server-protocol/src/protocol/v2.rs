@@ -4921,6 +4921,15 @@ pub enum ThreadItem {
     ImageView { id: String, path: AbsolutePathBuf },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    FunctionToolCall {
+        id: String,
+        tool_name: String,
+        arguments: String,
+        output: String,
+        success: Option<bool>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     ImageGeneration {
         id: String,
         status: String,
@@ -4964,6 +4973,7 @@ impl ThreadItem {
             | ThreadItem::CollabAgentToolCall { id, .. }
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
+            | ThreadItem::FunctionToolCall { id, .. }
             | ThreadItem::ImageGeneration { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
@@ -5365,6 +5375,13 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
+            },
+            CoreTurnItem::FunctionToolCall(tool_call) => ThreadItem::FunctionToolCall {
+                id: tool_call.id,
+                tool_name: tool_call.tool_name,
+                arguments: tool_call.arguments,
+                output: tool_call.output,
+                success: tool_call.success,
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,

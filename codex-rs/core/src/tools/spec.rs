@@ -20,6 +20,7 @@ use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
 use codex_tools::WaitAgentTimeoutOptions;
+#[cfg(feature = "code-mode")]
 use codex_tools::augment_tool_spec_for_code_mode;
 use codex_tools::build_tool_registry_plan;
 use std::collections::HashMap;
@@ -77,15 +78,19 @@ pub(crate) fn build_specs_with_discoverable_tools(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    #[cfg(feature = "code-mode")]
     use crate::tools::handlers::CodeModeExecuteHandler;
+    #[cfg(feature = "code-mode")]
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
+    use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -165,7 +170,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .collect::<Vec<_>>();
     let mut tool_search_handler = None;
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
+    #[cfg(feature = "code-mode")]
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
+    #[cfg(feature = "code-mode")]
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
@@ -201,9 +208,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 builder.register_handler(handler.name, Arc::new(CloseAgentHandlerV2));
             }
             ToolHandlerKind::CodeModeExecute => {
+                #[cfg(feature = "code-mode")]
                 builder.register_handler(handler.name, code_mode_handler.clone());
             }
             ToolHandlerKind::CodeModeWait => {
+                #[cfg(feature = "code-mode")]
                 builder.register_handler(handler.name, code_mode_wait_handler.clone());
             }
             ToolHandlerKind::DynamicTool => {
@@ -211,6 +220,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::FollowupTaskV2 => {
                 builder.register_handler(handler.name, Arc::new(FollowupTaskHandlerV2));
+            }
+            ToolHandlerKind::GrepFiles => {
+                builder.register_handler(handler.name, Arc::new(GrepFilesHandler));
             }
             ToolHandlerKind::JsRepl => {
                 builder.register_handler(handler.name, js_repl_handler.clone());
@@ -232,6 +244,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::Plan => {
                 builder.register_handler(handler.name, plan_handler.clone());
+            }
+            ToolHandlerKind::ReadFile => {
+                builder.register_handler(handler.name, Arc::new(ReadFileHandler));
             }
             ToolHandlerKind::RequestPermissions => {
                 builder.register_handler(handler.name, request_permissions_handler.clone());
@@ -321,7 +336,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 defer_loading: None,
             });
             let spec = if config.code_mode_enabled {
-                augment_tool_spec_for_code_mode(spec)
+                #[cfg(feature = "code-mode")]
+                {
+                    augment_tool_spec_for_code_mode(spec)
+                }
+                #[cfg(not(feature = "code-mode"))]
+                {
+                    spec
+                }
             } else {
                 spec
             };

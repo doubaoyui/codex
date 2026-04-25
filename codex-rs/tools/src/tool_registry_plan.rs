@@ -16,6 +16,7 @@ use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
+#[cfg(feature = "code-mode")]
 use crate::collect_code_mode_exec_prompt_tool_definitions;
 use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
@@ -23,9 +24,11 @@ use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
 use crate::create_close_agent_tool_v1;
 use crate::create_close_agent_tool_v2;
+#[cfg(feature = "code-mode")]
 use crate::create_code_mode_tool;
 use crate::create_exec_command_tool;
 use crate::create_followup_task_tool;
+use crate::create_grep_files_tool;
 use crate::create_image_generation_tool;
 use crate::create_js_repl_reset_tool;
 use crate::create_js_repl_tool;
@@ -34,6 +37,7 @@ use crate::create_list_dir_tool;
 use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
+use crate::create_read_file_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
@@ -53,6 +57,7 @@ use crate::create_update_plan_tool;
 use crate::create_view_image_tool;
 use crate::create_wait_agent_tool_v1;
 use crate::create_wait_agent_tool_v2;
+#[cfg(feature = "code-mode")]
 use crate::create_wait_tool;
 use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
@@ -73,6 +78,7 @@ pub fn build_tool_registry_plan(
     let mut plan = ToolRegistryPlan::new();
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
+    #[cfg(feature = "code-mode")]
     if config.code_mode_enabled {
         let namespace_descriptions = params
             .tool_namespaces
@@ -131,6 +137,8 @@ pub fn build_tool_registry_plan(
             ToolHandlerKind::CodeModeWait,
         );
     }
+    #[cfg(not(feature = "code-mode"))]
+    debug_assert!(!config.code_mode_enabled);
 
     if config.has_environment {
         match &config.shell_type {
@@ -333,6 +341,20 @@ pub fn build_tool_registry_plan(
         && config
             .experimental_supported_tools
             .iter()
+            .any(|tool| tool == "grep_files")
+    {
+        plan.push_spec(
+            create_grep_files_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("grep_files", ToolHandlerKind::GrepFiles);
+    }
+
+    if config.has_environment
+        && config
+            .experimental_supported_tools
+            .iter()
             .any(|tool| tool == "list_dir")
     {
         plan.push_spec(
@@ -341,6 +363,20 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("list_dir", ToolHandlerKind::ListDir);
+    }
+
+    if config.has_environment
+        && config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "read_file")
+    {
+        plan.push_spec(
+            create_read_file_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler("read_file", ToolHandlerKind::ReadFile);
     }
 
     if config
@@ -577,6 +613,7 @@ pub fn build_tool_registry_plan(
     plan
 }
 
+#[cfg(feature = "code-mode")]
 fn compare_code_mode_tools(
     left: &codex_code_mode::ToolDefinition,
     right: &codex_code_mode::ToolDefinition,
@@ -591,6 +628,7 @@ fn compare_code_mode_tools(
         .then_with(|| left.name.cmp(&right.name))
 }
 
+#[cfg(feature = "code-mode")]
 fn code_mode_namespace_name<'a>(
     tool: &codex_code_mode::ToolDefinition,
     namespace_descriptions: &'a BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,

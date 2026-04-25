@@ -20,6 +20,7 @@ codex-backend-openapi-models = { path = "../codex-backend-openapi-models" }
 codex-client = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-core = { path = "../core", default-features = false }
 
 [dev-dependencies]
 pretty_assertions = "1"

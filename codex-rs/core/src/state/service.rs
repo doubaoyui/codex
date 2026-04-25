@@ -12,6 +12,7 @@ use crate::guardian::GuardianRejection;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
+#[cfg(feature = "code-mode")]
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
@@ -63,6 +64,7 @@ pub(crate) struct SessionServices {
     pub(crate) thread_store: LocalThreadStore,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    #[cfg(feature = "code-mode")]
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) environment: Option<Arc<Environment>>,
 }
