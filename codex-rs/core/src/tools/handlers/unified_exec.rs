@@ -13,7 +13,8 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::handlers::resolve_tool_environment;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
@@ -24,20 +25,24 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::generate_chunk_id;
+use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_shell_command::is_safe_command::is_known_safe_command;
+use codex_tools::ToolName;
 use codex_tools::UnifiedExecShellMode;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub struct UnifiedExecHandler;
+pub struct ExecCommandHandler;
+pub struct WriteStdinHandler;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
@@ -57,11 +62,21 @@ pub(crate) struct ExecCommandArgs {
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
     #[serde(default)]
-    additional_permissions: Option<PermissionProfile>,
+    additional_permissions: Option<AdditionalPermissionProfile>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
     prefix_rule: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecCommandEnvironmentArgs {
+    #[serde(default)]
+    environment_id: Option<String>,
+    // Keep this raw until after environment selection; relative paths must be
+    // resolved against the selected environment cwd, not the process cwd.
+    #[serde(default)]
+    workdir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,8 +103,19 @@ fn default_tty() -> bool {
     false
 }
 
-impl ToolHandler for UnifiedExecHandler {
+fn effective_max_output_tokens(
+    max_output_tokens: Option<usize>,
+    truncation_policy: TruncationPolicy,
+) -> usize {
+    resolve_max_tokens(max_output_tokens).min(truncation_policy.token_budget())
+}
+
+impl ToolHandler for ExecCommandHandler {
     type Output = ExecCommandToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("exec_command")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -124,41 +150,24 @@ impl ToolHandler for UnifiedExecHandler {
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        if invocation.tool_name.namespace.is_some()
-            || invocation.tool_name.name.as_str() != "exec_command"
-        {
-            return None;
-        }
-
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
         };
 
         parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
-            .map(|args| PreToolUsePayload { command: args.cmd })
+            .map(|args| PreToolUsePayload {
+                tool_name: HookToolName::bash(),
+                tool_input: serde_json::json!({ "command": args.cmd }),
+            })
     }
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        payload: &ToolPayload,
-        result: &dyn ToolOutput,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { arguments } = payload else {
-            return None;
-        };
-
-        let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
-        if args.tty {
-            return None;
-        }
-
-        let tool_response = result.post_tool_use_response(call_id, payload)?;
-        Some(PostToolUsePayload {
-            command: args.cmd,
-            tool_response,
-        })
+        post_unified_exec_tool_use_payload(invocation, result)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -167,7 +176,6 @@ impl ToolHandler for UnifiedExecHandler {
             turn,
             tracker,
             call_id,
-            tool_name,
             payload,
             ..
         } = invocation;
@@ -176,225 +184,290 @@ impl ToolHandler for UnifiedExecHandler {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "unified_exec handler received unsupported payload".to_string(),
+                    "exec_command handler received unsupported payload".to_string(),
                 ));
             }
         };
 
-        let Some(environment) = turn.environment.as_ref() else {
+        let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
+        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
+        let Some(turn_environment) =
+            resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
                 "unified exec is unavailable in this session".to_string(),
             ));
         };
+        let cwd = environment_args
+            .workdir
+            .as_deref()
+            .filter(|workdir| !workdir.is_empty())
+            .map_or_else(
+                || turn_environment.cwd.clone(),
+                |workdir| turn_environment.cwd.join(workdir),
+            );
+        let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
+        let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+        let hook_command = args.cmd.clone();
+        maybe_emit_implicit_skill_invocation(
+            session.as_ref(),
+            context.turn.as_ref(),
+            &hook_command,
+            &cwd,
+        )
+        .await;
+        let process_id = manager.allocate_process_id().await;
+        let command = get_command(
+            &args,
+            session.user_shell(),
+            &turn.tools_config.unified_exec_shell_mode,
+            turn.tools_config.allow_login_shell,
+        )
+        .map_err(FunctionCallError::RespondToModel)?;
+        let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
-        let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
+        let ExecCommandArgs {
+            tty,
+            yield_time_ms,
+            max_output_tokens,
+            sandbox_permissions,
+            additional_permissions,
+            justification,
+            prefix_rule,
+            ..
+        } = args;
+        let max_output_tokens =
+            effective_max_output_tokens(max_output_tokens, turn.truncation_policy);
 
-        let response = match tool_name.name.as_str() {
-            "exec_command" => {
-                let cwd = resolve_workdir_base_path(&arguments, &context.turn.cwd)?;
-                let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
-                let workdir = context.turn.resolve_path(args.workdir.clone());
-                maybe_emit_implicit_skill_invocation(
-                    session.as_ref(),
-                    context.turn.as_ref(),
-                    &args.cmd,
-                    &workdir,
-                )
-                .await;
-                let process_id = manager.allocate_process_id().await;
-                let command = get_command(
-                    &args,
-                    session.user_shell(),
-                    &turn.tools_config.unified_exec_shell_mode,
-                    turn.tools_config.allow_login_shell,
-                )
-                .map_err(FunctionCallError::RespondToModel)?;
-                let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+        let exec_permission_approvals_enabled =
+            session.features().enabled(Feature::ExecPermissionApprovals);
+        let requested_additional_permissions = additional_permissions.clone();
+        let effective_additional_permissions = apply_granted_turn_permissions(
+            context.session.as_ref(),
+            cwd.as_path(),
+            sandbox_permissions,
+            additional_permissions,
+        )
+        .await;
+        let additional_permissions_allowed = exec_permission_approvals_enabled
+            || (session.features().enabled(Feature::RequestPermissionsTool)
+                && effective_additional_permissions.permissions_preapproved);
 
-                let ExecCommandArgs {
-                    workdir,
-                    tty,
-                    yield_time_ms,
-                    max_output_tokens,
-                    sandbox_permissions,
-                    additional_permissions,
-                    justification,
-                    prefix_rule,
-                    ..
-                } = args;
+        // Sticky turn permissions have already been approved, so they should
+        // continue through the normal exec approval flow for the command.
+        if effective_additional_permissions
+            .sandbox_permissions
+            .requests_sandbox_override()
+            && !effective_additional_permissions.permissions_preapproved
+            && !matches!(
+                context.turn.approval_policy.value(),
+                codex_protocol::protocol::AskForApproval::OnRequest
+            )
+        {
+            let approval_policy = context.turn.approval_policy.value();
+            manager.release_process_id(process_id).await;
+            return Err(FunctionCallError::RespondToModel(format!(
+                "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
+            )));
+        }
 
-                let exec_permission_approvals_enabled =
-                    session.features().enabled(Feature::ExecPermissionApprovals);
-                let requested_additional_permissions = additional_permissions.clone();
-                let effective_additional_permissions = apply_granted_turn_permissions(
-                    context.session.as_ref(),
-                    sandbox_permissions,
-                    additional_permissions,
-                )
-                .await;
-                let additional_permissions_allowed = exec_permission_approvals_enabled
-                    || (session.features().enabled(Feature::RequestPermissionsTool)
-                        && effective_additional_permissions.permissions_preapproved);
-
-                // Sticky turn permissions have already been approved, so they should
-                // continue through the normal exec approval flow for the command.
-                if effective_additional_permissions
-                    .sandbox_permissions
-                    .requests_sandbox_override()
-                    && !effective_additional_permissions.permissions_preapproved
-                    && !matches!(
-                        context.turn.approval_policy.value(),
-                        codex_protocol::protocol::AskForApproval::OnRequest
-                    )
-                {
-                    let approval_policy = context.turn.approval_policy.value();
-                    manager.release_process_id(process_id).await;
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
-                    )));
-                }
-
-                let workdir = workdir.filter(|value| !value.is_empty());
-
-                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
-                let cwd = workdir.clone().unwrap_or(cwd);
-                let normalized_additional_permissions = match implicit_granted_permissions(
-                    sandbox_permissions,
-                    requested_additional_permissions.as_ref(),
-                    &effective_additional_permissions,
-                )
-                .map_or_else(
-                    || {
-                        normalize_and_validate_additional_permissions(
-                            additional_permissions_allowed,
-                            context.turn.approval_policy.value(),
-                            effective_additional_permissions.sandbox_permissions,
-                            effective_additional_permissions.additional_permissions,
-                            effective_additional_permissions.permissions_preapproved,
-                            &cwd,
-                        )
-                    },
-                    |permissions| Ok(Some(permissions)),
-                ) {
-                    Ok(normalized) => normalized,
-                    Err(err) => {
-                        manager.release_process_id(process_id).await;
-                        return Err(FunctionCallError::RespondToModel(err));
-                    }
-                };
-
-                if let Some(output) = intercept_apply_patch(
-                    &command,
+        let normalized_additional_permissions = match implicit_granted_permissions(
+            sandbox_permissions,
+            requested_additional_permissions.as_ref(),
+            &effective_additional_permissions,
+        )
+        .map_or_else(
+            || {
+                normalize_and_validate_additional_permissions(
+                    additional_permissions_allowed,
+                    context.turn.approval_policy.value(),
+                    effective_additional_permissions.sandbox_permissions,
+                    effective_additional_permissions.additional_permissions,
+                    effective_additional_permissions.permissions_preapproved,
                     &cwd,
-                    fs.as_ref(),
-                    context.session.clone(),
-                    context.turn.clone(),
-                    Some(&tracker),
-                    &context.call_id,
-                    &tool_name.name,
                 )
-                .await?
-                {
-                    manager.release_process_id(process_id).await;
-                    return Ok(ExecCommandToolOutput {
-                        event_call_id: String::new(),
-                        chunk_id: String::new(),
-                        wall_time: std::time::Duration::ZERO,
-                        raw_output: output.into_text().into_bytes(),
-                        max_output_tokens: None,
-                        process_id: None,
-                        exit_code: None,
-                        original_token_count: None,
-                        session_command: None,
-                    });
-                }
-
-                emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                let session_command = command.clone();
-                match manager
-                    .exec_command(
-                        ExecCommandRequest {
-                            command,
-                            hook_command: args.cmd,
-                            process_id,
-                            yield_time_ms,
-                            max_output_tokens,
-                            workdir,
-                            network: context.turn.network.clone(),
-                            tty,
-                            sandbox_permissions: effective_additional_permissions
-                                .sandbox_permissions,
-                            additional_permissions: normalized_additional_permissions,
-                            additional_permissions_preapproved: effective_additional_permissions
-                                .permissions_preapproved,
-                            justification,
-                            prefix_rule,
-                        },
-                        &context,
-                    )
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(UnifiedExecError::SandboxDenied { output, .. }) => {
-                        let output_text = output.aggregated_output.text;
-                        let original_token_count = approx_token_count(&output_text);
-                        ExecCommandToolOutput {
-                            event_call_id: context.call_id.clone(),
-                            chunk_id: generate_chunk_id(),
-                            wall_time: output.duration,
-                            raw_output: output_text.into_bytes(),
-                            max_output_tokens,
-                            // Sandbox denial is terminal, so there is no live
-                            // process for write_stdin to resume.
-                            process_id: None,
-                            exit_code: Some(output.exit_code),
-                            original_token_count: Some(original_token_count),
-                            session_command: Some(session_command),
-                        }
-                    }
-                    Err(err) => {
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "exec_command failed for `{command_for_display}`: {err:?}"
-                        )));
-                    }
-                }
-            }
-            "write_stdin" => {
-                let args: WriteStdinArgs = parse_arguments(&arguments)?;
-                let response = manager
-                    .write_stdin(WriteStdinRequest {
-                        process_id: args.session_id,
-                        input: &args.chars,
-                        yield_time_ms: args.yield_time_ms,
-                        max_output_tokens: args.max_output_tokens,
-                    })
-                    .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
-                    })?;
-
-                let interaction = TerminalInteractionEvent {
-                    call_id: response.event_call_id.clone(),
-                    process_id: args.session_id.to_string(),
-                    stdin: args.chars.clone(),
-                };
-                session
-                    .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
-                    .await;
-
-                response
-            }
-            other => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "unsupported unified exec function {other}"
-                )));
+            },
+            |permissions| Ok(Some(permissions)),
+        ) {
+            Ok(normalized) => normalized,
+            Err(err) => {
+                manager.release_process_id(process_id).await;
+                return Err(FunctionCallError::RespondToModel(err));
             }
         };
 
+        if let Some(output) = intercept_apply_patch(
+            &command,
+            &cwd,
+            fs.as_ref(),
+            context.session.clone(),
+            context.turn.clone(),
+            Some(&tracker),
+            &context.call_id,
+            "exec_command",
+        )
+        .await?
+        {
+            manager.release_process_id(process_id).await;
+            return Ok(ExecCommandToolOutput {
+                event_call_id: String::new(),
+                chunk_id: String::new(),
+                wall_time: std::time::Duration::ZERO,
+                raw_output: output.into_text().into_bytes(),
+                max_output_tokens: Some(max_output_tokens),
+                process_id: None,
+                exit_code: None,
+                original_token_count: None,
+                hook_command: None,
+            });
+        }
+
+        emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
+        match manager
+            .exec_command(
+                ExecCommandRequest {
+                    command,
+                    hook_command: hook_command.clone(),
+                    process_id,
+                    yield_time_ms,
+                    max_output_tokens: Some(max_output_tokens),
+                    cwd,
+                    environment,
+                    network: context.turn.network.clone(),
+                    tty,
+                    sandbox_permissions: effective_additional_permissions.sandbox_permissions,
+                    additional_permissions: normalized_additional_permissions,
+                    additional_permissions_preapproved: effective_additional_permissions
+                        .permissions_preapproved,
+                    justification,
+                    prefix_rule,
+                },
+                &context,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(UnifiedExecError::SandboxDenied { output, .. }) => {
+                let output_text = output.aggregated_output.text;
+                let original_token_count = approx_token_count(&output_text);
+                Ok(ExecCommandToolOutput {
+                    event_call_id: context.call_id.clone(),
+                    chunk_id: generate_chunk_id(),
+                    wall_time: output.duration,
+                    raw_output: output_text.into_bytes(),
+                    max_output_tokens: Some(max_output_tokens),
+                    // Sandbox denial is terminal, so there is no live
+                    // process for write_stdin to resume.
+                    process_id: None,
+                    exit_code: Some(output.exit_code),
+                    original_token_count: Some(original_token_count),
+                    hook_command: Some(hook_command),
+                })
+            }
+            Err(err) => Err(FunctionCallError::RespondToModel(format!(
+                "exec_command failed for `{command_for_display}`: {err:?}"
+            ))),
+        }
+    }
+}
+
+impl ToolHandler for WriteStdinHandler {
+    type Output = ExecCommandToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("write_stdin")
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
+
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        true
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        invocation: &ToolInvocation,
+        result: &Self::Output,
+    ) -> Option<PostToolUsePayload> {
+        post_unified_exec_tool_use_payload(invocation, result)
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
+
+        let arguments = match payload {
+            ToolPayload::Function { arguments } => arguments,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "write_stdin handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let args: WriteStdinArgs = parse_arguments(&arguments)?;
+        let max_output_tokens =
+            effective_max_output_tokens(args.max_output_tokens, turn.truncation_policy);
+        let response = session
+            .services
+            .unified_exec_manager
+            .write_stdin(WriteStdinRequest {
+                process_id: args.session_id,
+                input: &args.chars,
+                yield_time_ms: args.yield_time_ms,
+                max_output_tokens: Some(max_output_tokens),
+            })
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
+            })?;
+
+        let interaction = TerminalInteractionEvent {
+            call_id: response.event_call_id.clone(),
+            process_id: args.session_id.to_string(),
+            stdin: args.chars.clone(),
+        };
+        session
+            .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+            .await;
+
         Ok(response)
     }
+}
+
+fn post_unified_exec_tool_use_payload(
+    invocation: &ToolInvocation,
+    result: &ExecCommandToolOutput,
+) -> Option<PostToolUsePayload> {
+    let ToolPayload::Function { .. } = &invocation.payload else {
+        return None;
+    };
+
+    let command = result.hook_command.clone()?;
+    let tool_use_id = if result.event_call_id.is_empty() {
+        invocation.call_id.clone()
+    } else {
+        result.event_call_id.clone()
+    };
+    let tool_response = result.post_tool_use_response(&tool_use_id, &invocation.payload)?;
+    Some(PostToolUsePayload {
+        tool_name: HookToolName::bash(),
+        tool_use_id,
+        tool_input: serde_json::json!({ "command": command }),
+        tool_response,
+    })
 }
 
 fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool) {

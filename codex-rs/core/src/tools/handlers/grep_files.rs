@@ -15,6 +15,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
 
 pub struct GrepFilesHandler;
 
@@ -41,6 +42,10 @@ struct GrepFilesArgs {
 
 impl ToolHandler for GrepFilesHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("grep_files")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function

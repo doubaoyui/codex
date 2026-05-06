@@ -32,7 +32,8 @@ fn resume_history(
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
-        sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+        sandbox_policy: config.legacy_sandbox_policy(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -70,9 +71,10 @@ fn resume_history(
                 last_agent_message: None,
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             })),
         ],
-        rollout_path: rollout_path.to_path_buf(),
+        rollout_path: Some(rollout_path.to_path_buf()),
     })
 }
 
@@ -93,7 +95,8 @@ async fn emits_warning_when_resumed_model_differs() {
     let thread_manager = codex_core::test_support::thread_manager_with_models_provider(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
-    );
+    )
+    .await;
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
 
@@ -103,7 +106,7 @@ async fn emits_warning_when_resumed_model_differs() {
         ..
     } = thread_manager
         .resume_thread_with_history(
-            config,
+            config.clone(),
             initial_history,
             auth_manager,
             /*persist_extended_history*/ false,

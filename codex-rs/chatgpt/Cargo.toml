@@ -14,8 +14,11 @@ codex-app-server-protocol = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { path = "../core", default-features = false }
+codex-core-plugins = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-plugin = { workspace = true }
 codex-utils-cli = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
