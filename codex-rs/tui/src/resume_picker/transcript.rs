@@ -208,6 +208,7 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
         ThreadItem::UserMessage { .. }
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::Plan { .. }
+        | ThreadItem::FunctionToolCall { .. }
         | ThreadItem::Reasoning { .. } => return None,
     };
     (!lines.is_empty()).then(|| PlainHistoryCell::new(lines))
