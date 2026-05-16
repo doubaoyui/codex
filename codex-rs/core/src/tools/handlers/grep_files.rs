@@ -11,11 +11,15 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use codex_tools::create_grep_files_tool;
 
 pub struct GrepFilesHandler;
 
@@ -40,18 +44,24 @@ struct GrepFilesArgs {
     limit: usize,
 }
 
-impl ToolHandler for GrepFilesHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for GrepFilesHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("grep_files")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_grep_files_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
@@ -99,18 +109,20 @@ impl ToolHandler for GrepFilesHandler {
         .await?;
 
         if results.is_empty() {
-            Ok(FunctionToolOutput::from_text(
+            Ok(boxed_tool_output(FunctionToolOutput::from_text(
                 "No matches found.".to_string(),
                 Some(false),
-            ))
+            )))
         } else {
-            Ok(FunctionToolOutput::from_text(
+            Ok(boxed_tool_output(FunctionToolOutput::from_text(
                 results.join("\n"),
                 Some(true),
-            ))
+            )))
         }
     }
 }
+
+impl CoreToolRuntime for GrepFilesHandler {}
 
 async fn verify_path_exists(path: &Path) -> Result<(), FunctionCallError> {
     tokio::fs::metadata(path).await.map_err(|err| {
@@ -230,7 +242,3 @@ fn search_files_native(
         .map(|(path, _)| path)
         .collect())
 }
-
-#[cfg(test)]
-#[path = "grep_files_tests.rs"]
-mod tests;

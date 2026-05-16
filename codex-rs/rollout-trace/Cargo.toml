@@ -20,10 +20,11 @@ workspace = true
 anyhow = { workspace = true }
 codex-code-mode = { workspace = true, optional = true }
 codex-protocol = { workspace = true }
+http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -1,11 +1,9 @@
 use super::*;
 
-use crate::sandbox_tags::sandbox_tag;
+use crate::sandbox_tags::permission_profile_sandbox_tag;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSource;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
@@ -90,12 +88,12 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let permission_profile = PermissionProfile::read_only();
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -107,25 +105,30 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let json: Value = serde_json::from_str(&header).expect("json");
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
     let session_id = json.get("session_id").and_then(Value::as_str);
+    let thread_id = json.get("thread_id").and_then(Value::as_str);
     let thread_source = json.get("thread_source").and_then(Value::as_str);
 
-    let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
+    let expected_sandbox = permission_profile_sandbox_tag(
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
+    assert_eq!(thread_id, Some("thread-a"));
     assert_eq!(thread_source, Some("user"));
     assert!(json.get("session_source").is_none());
 }
 
 #[test]
-fn turn_metadata_state_classifies_subagent_thread_source() {
+fn turn_metadata_state_uses_explicit_subagent_thread_source() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
-    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
-
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &session_source,
+        "thread-a".to_string(),
+        Some(ThreadSource::Subagent),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -148,7 +151,8 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -174,7 +178,8 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        /*thread_source*/ None,
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -211,6 +216,56 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
 }
 
 #[test]
+fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_request_meta() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let permission_profile = PermissionProfile::read_only();
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        cwd,
+        &permission_profile,
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let header = state.current_header_value().expect("header");
+    let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        header_json
+            .get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .is_none()
+    );
+
+    let meta = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("turn metadata should be present");
+    assert!(meta.get(USER_INPUT_REQUESTED_DURING_TURN_KEY).is_none());
+
+    state.mark_user_input_requested_during_turn();
+
+    let header = state.current_header_value().expect("header");
+    let header_json: Value = serde_json::from_str(&header).expect("json");
+    assert!(
+        header_json
+            .get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .is_none()
+    );
+
+    let meta = state
+        .current_meta_value_for_mcp_request(test_mcp_turn_metadata_context())
+        .expect("turn metadata should be present");
+    assert_eq!(
+        meta.get(USER_INPUT_REQUESTED_DURING_TURN_KEY)
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
@@ -218,7 +273,8 @@ fn turn_metadata_state_ignores_client_turn_started_at_unix_ms_before_start() {
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -244,7 +300,8 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
-        &SessionSource::Exec,
+        "thread-a".to_string(),
+        Some(ThreadSource::User),
         "turn-a".to_string(),
         cwd,
         &permission_profile,
@@ -260,6 +317,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
             "client-supplied".to_string(),
         ),
         ("session_id".to_string(), "client-supplied".to_string()),
+        ("thread_id".to_string(), "client-supplied".to_string()),
         ("thread_source".to_string(), "client-supplied".to_string()),
         (
             "turn_started_at_unix_ms".to_string(),
@@ -278,6 +336,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["model"].as_str(), Some("client-supplied"));
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
+    assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
     assert_eq!(

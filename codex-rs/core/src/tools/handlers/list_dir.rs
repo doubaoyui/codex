@@ -7,11 +7,15 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use codex_tools::create_list_dir_tool;
 
 pub struct ListDirHandler;
 
@@ -44,18 +48,24 @@ const fn default_depth() -> usize {
     DEFAULT_DEPTH
 }
 
-impl ToolHandler for ListDirHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ListDirHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("list_dir")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_list_dir_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -108,9 +118,14 @@ impl ToolHandler for ListDirHandler {
             lines.push(format!("{number}. [{}] {}", entry.kind, entry.path));
         }
 
-        Ok(FunctionToolOutput::from_text(lines.join("\n"), Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            lines.join("\n"),
+            Some(true),
+        )))
     }
 }
+
+impl CoreToolRuntime for ListDirHandler {}
 
 struct DirEntryLine {
     kind: &'static str,

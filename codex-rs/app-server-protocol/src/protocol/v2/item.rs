@@ -1090,6 +1090,9 @@ pub struct ItemStartedNotification {
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this review started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
     /// Stable identifier for this review.
     pub review_id: String,
     /// Identifier for the reviewed item or tool call when one exists.
@@ -1116,6 +1119,12 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
+    /// Unix timestamp (in milliseconds) when this review started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
+    /// Unix timestamp (in milliseconds) when this review completed.
+    #[ts(type = "number")]
+    pub completed_at_ms: i64,
     /// Stable identifier for this review.
     pub review_id: String,
     /// Identifier for the reviewed item or tool call when one exists.
@@ -1265,6 +1274,9 @@ pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    /// Unix timestamp (in milliseconds) when this approval request started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
     /// Unique identifier for this specific approval callback.
     ///
     /// For regular shell/unified_exec approvals, this is null.
@@ -1338,6 +1350,9 @@ pub struct FileChangeRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    /// Unix timestamp (in milliseconds) when this approval request started.
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
     /// Optional explanatory reason (e.g. request for extra write access).
     #[ts(optional = nullable)]
     pub reason: Option<String>,

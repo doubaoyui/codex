@@ -7,11 +7,15 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use codex_tools::create_read_file_tool;
 
 pub struct ReadFileHandler;
 
@@ -78,18 +82,24 @@ impl LineRecord {
     }
 }
 
-impl ToolHandler for ReadFileHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ReadFileHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("read_file")
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_read_file_tool())
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -135,12 +145,14 @@ impl ToolHandler for ReadFileHandler {
             }
         };
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             collected.join("\n"),
             Some(true),
-        ))
+        )))
     }
 }
+
+impl CoreToolRuntime for ReadFileHandler {}
 
 mod slice {
     use std::path::Path;
@@ -454,7 +466,3 @@ mod defaults {
         true
     }
 }
-
-#[cfg(test)]
-#[path = "read_file_tests.rs"]
-mod tests;

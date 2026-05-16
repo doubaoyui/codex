@@ -64,6 +64,7 @@ fn resume_history(
                 images: None,
                 local_images: vec![],
                 text_elements: vec![],
+                ..Default::default()
             })),
             RolloutItem::TurnContext(turn_ctx),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
@@ -95,8 +96,7 @@ async fn emits_warning_when_resumed_model_differs() {
     let thread_manager = codex_core::test_support::thread_manager_with_models_provider(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
-    )
-    .await;
+    );
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
 
