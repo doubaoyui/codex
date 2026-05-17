@@ -1,5 +1,6 @@
 use super::*;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
+use crate::tools::handlers::apply_patch_spec::create_apply_patch_json_tool;
 use crate::tools::handlers::goal_spec::create_create_goal_tool;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::handlers::goal_spec::create_update_goal_tool;
@@ -38,6 +39,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::WebSearchToolType;
@@ -348,6 +350,49 @@ fn apply_patch_spec_includes_environment_id_only_for_multiple_selected_environme
         &[],
     );
     assert_apply_patch_environment_id(&multi_environment_tools, /*expected_present*/ true);
+}
+
+#[test]
+fn apply_patch_function_tool_type_builds_function_spec() {
+    let model_info = ModelInfo {
+        apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+        ..model_info()
+    };
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &Features::with_defaults(),
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (single_environment_tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_eq!(
+        find_tool(&single_environment_tools, "apply_patch"),
+        &create_apply_patch_json_tool(/*include_environment_id*/ false)
+    );
+
+    let multi_environment_config =
+        tools_config.with_environment_mode(ToolEnvironmentMode::Multiple);
+    let (multi_environment_tools, _) = build_specs(
+        &multi_environment_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_eq!(
+        find_tool(&multi_environment_tools, "apply_patch"),
+        &create_apply_patch_json_tool(/*include_environment_id*/ true)
+    );
 }
 
 #[test]

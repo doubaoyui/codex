@@ -441,10 +441,15 @@ fn collect_tool_executors(
         )));
     }
 
-    if config.environment_mode.has_environment() && config.apply_patch_tool_type.is_some() {
+    if config.environment_mode.has_environment()
+        && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
+    {
         let include_environment_id =
             matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
-        executors.push(Arc::new(ApplyPatchHandler::new(include_environment_id)));
+        executors.push(Arc::new(ApplyPatchHandler::new(
+            apply_patch_tool_type.clone(),
+            include_environment_id,
+        )));
     }
 
     if config

@@ -34,3 +34,46 @@ fn create_apply_patch_freeform_tool_includes_environment_id_when_requested() {
             .contains("\"*** Environment ID: \" filename LF")
     );
 }
+
+#[test]
+fn create_apply_patch_json_tool_matches_expected_shape() {
+    let ToolSpec::Function(tool) =
+        create_apply_patch_json_tool(/*include_environment_id*/ false)
+    else {
+        panic!("expected function tool");
+    };
+
+    assert_eq!(tool.name, "apply_patch");
+    assert!(!tool.strict);
+    let Some(properties) = tool.parameters.properties else {
+        panic!("expected object properties");
+    };
+    assert_eq!(
+        properties.get("input"),
+        Some(&JsonSchema::string(Some(
+            "The entire apply_patch patch body.".to_string()
+        )))
+    );
+    assert_eq!(tool.parameters.required, Some(vec!["input".to_string()]));
+    assert_eq!(tool.parameters.additional_properties, Some(false.into()));
+}
+
+#[test]
+fn create_apply_patch_json_tool_mentions_environment_id_when_requested() {
+    let ToolSpec::Function(tool) =
+        create_apply_patch_json_tool(/*include_environment_id*/ true)
+    else {
+        panic!("expected function tool");
+    };
+
+    assert!(tool.description.contains("*** Environment ID: <id>"));
+    let Some(properties) = tool.parameters.properties else {
+        panic!("expected object properties");
+    };
+    assert!(
+        properties
+            .get("input")
+            .and_then(|schema| schema.description.as_deref())
+            .is_some_and(|description| description.contains("*** Environment ID: <id>"))
+    );
+}

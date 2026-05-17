@@ -7464,6 +7464,42 @@ async fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn model_catalog_json_accepts_function_apply_patch_tool_type() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let catalog_path = codex_home.path().join("catalog.json");
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    catalog.models[0].apply_patch_tool_type =
+        Some(codex_protocol::openai_models::ApplyPatchToolType::Function);
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+
+    let cfg = ConfigToml {
+        model_catalog_json: Some(catalog_path.abs()),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config
+            .model_catalog
+            .and_then(|catalog| catalog.models.into_iter().next())
+            .and_then(|model| model.apply_patch_tool_type),
+        Some(codex_protocol::openai_models::ApplyPatchToolType::Function)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let catalog_path = codex_home.path().join("catalog.json");

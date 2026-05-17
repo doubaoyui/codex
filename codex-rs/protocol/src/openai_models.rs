@@ -203,6 +203,7 @@ pub enum ConfigShellToolType {
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
     Freeform,
+    Function,
 }
 
 #[derive(
@@ -814,6 +815,23 @@ mod tests {
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
+    }
+
+    #[test]
+    fn model_info_accepts_function_apply_patch_tool_type() {
+        let model = ModelInfo {
+            apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+            ..test_model(/*spec*/ None)
+        };
+
+        let decoded: ModelInfo =
+            serde_json::from_value(serde_json::to_value(model).expect("serialize model info"))
+                .expect("deserialize model info");
+
+        assert_eq!(
+            decoded.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Function)
+        );
     }
 
     #[test]

@@ -61,6 +61,27 @@ async fn pre_tool_use_payload_uses_freeform_patch_input() {
 }
 
 #[tokio::test]
+async fn pre_tool_use_payload_uses_function_patch_input() {
+    let patch = sample_patch();
+    let payload = ToolPayload::Function {
+        arguments: json!({ "input": patch }).to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler::new(
+        ApplyPatchToolType::Function,
+        /*multi_environment*/ false,
+    );
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(PreToolUsePayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: json!({ "command": patch }),
+        })
+    );
+}
+
+#[tokio::test]
 async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
     let patch = sample_patch();
     let payload = ToolPayload::Custom {
@@ -78,6 +99,34 @@ async fn post_tool_use_payload_uses_patch_input_and_tool_output() {
             tool_input: json!({ "command": patch }),
             tool_response: json!("Success. Updated files."),
         })
+    );
+}
+
+#[tokio::test]
+async fn updated_hook_input_rewrites_function_patch_input() {
+    let original_patch = sample_patch();
+    let updated_patch = r#"*** Begin Patch
+*** Add File: updated.txt
++updated
+*** End Patch"#;
+    let payload = ToolPayload::Function {
+        arguments: json!({ "input": original_patch }).to_string(),
+    };
+    let invocation = invocation_for_payload(payload).await;
+    let handler = ApplyPatchHandler::new(
+        ApplyPatchToolType::Function,
+        /*multi_environment*/ false,
+    );
+
+    let updated = handler
+        .with_updated_hook_input(invocation, json!({ "command": updated_patch }))
+        .expect("rewrite function arguments");
+    let ToolPayload::Function { arguments } = updated.payload else {
+        panic!("expected function payload");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&arguments).expect("json"),
+        json!({ "input": updated_patch })
     );
 }
 
